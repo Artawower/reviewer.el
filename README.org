@@ -64,6 +64,18 @@ The posframe's geometry is a single plist,
 margin left and right, in pixels -- same idea as a window's fringe),
 ~:min-width~ (characters), and ~:min-height~ (lines).
 
+#+BEGIN_SRC emacs-lisp
+(use-package reviewer
+  :custom-face
+  (reviewer-highlight-face ((t :inherit highlight)))
+  (reviewer-posframe-face ((t :inherit tooltip)))
+  (reviewer-posframe-border-face ((t :foreground "orange")))
+  (reviewer-posframe-author-face ((t :inherit font-lock-keyword-face :weight bold)))
+  (reviewer-posframe-time-face ((t :inherit font-lock-comment-face)))
+  :custom
+  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :min-width 40 :min-height 5)))
+#+END_SRC
+
 * Installation
 
 ** straight.el + use-package
