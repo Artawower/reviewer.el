@@ -64,16 +64,29 @@ The posframe's geometry is a single plist,
 margin left and right, in pixels -- same idea as a window's fringe),
 ~:min-width~ (characters), and ~:min-height~ (lines).
 
+~reviewer-use-transient~ toggles the ~C-c r~ transient menu (see above),
+and ~reviewer-annotation-edit-buffer-action~ controls where the ~C-c r a~
+edit buffer pops up.
+
+A full sample config, combining installation with all of the above:
+
 #+BEGIN_SRC emacs-lisp
 (use-package reviewer
+  :straight (reviewer :type git :host github :repo "SreenivasVRao/reviewer.el")
+  :hook (after-init . reviewer-global-mode)
+  :custom
+  (reviewer-use-transient t)
+  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :min-width 40 :min-height 5))
   :custom-face
   (reviewer-highlight-face ((t :inherit highlight)))
   (reviewer-posframe-face ((t :inherit tooltip)))
   (reviewer-posframe-border-face ((t :foreground "orange")))
   (reviewer-posframe-author-face ((t :inherit font-lock-keyword-face :weight bold)))
   (reviewer-posframe-time-face ((t :inherit font-lock-comment-face)))
-  :custom
-  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :min-width 40 :min-height 5)))
+  :init
+  (setq reviewer-annotation-edit-buffer-action
+        '((display-buffer-reuse-window display-buffer-below-selected)
+          (window-height . 20))))
 #+END_SRC
 
 * Installation
