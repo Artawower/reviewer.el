@@ -51,6 +51,19 @@ straight to ~reviewer-annotate~ with no menu shown.
 
 [[./images/transient.gif]]
 
+** Customization
+
+The annotated region is highlighted with ~reviewer-highlight-face~,
+and the posframe from ~C-c r s~ with ~reviewer-posframe-face~ (body),
+~reviewer-posframe-border-face~ (border), ~reviewer-posframe-author-face~
+and ~reviewer-posframe-time-face~ (header). All are under the ~reviewer~
+customize group.
+
+The posframe's geometry is a single plist,
+~reviewer-posframe-parameters~, with keys ~:border-width~, ~:fringe~ (blank
+margin left and right, in pixels -- same idea as a window's fringe),
+~:min-width~ (characters), and ~:min-height~ (lines).
+
 * Installation
 
 ** straight.el + use-package

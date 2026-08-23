@@ -36,7 +36,8 @@
 
 (defface reviewer-highlight-face
   '((t :inherit highlight))
-  "Face used to highlight an annotated region.")
+  "Face used to highlight an annotated region."
+  :group 'reviewer)
 
 (defun reviewer--annotation-p (overlay)
   "Return non-nil if OVERLAY is a reviewer annotation."
@@ -210,19 +211,39 @@ TARGET is either an existing annotation overlay, or a list of
 
 (defface reviewer-posframe-face
   '((t :inherit tooltip))
-  "Face used for the posframe that displays annotation text.")
+  "Face used for the posframe that displays annotation text."
+  :group 'reviewer)
 
 (defface reviewer-posframe-border-face
   '((t :inherit font-lock-function-name-face))
-  "Face whose foreground colors the posframe's border.")
+  "Face whose foreground colors the posframe's border."
+  :group 'reviewer)
 
 (defface reviewer-posframe-author-face
   '((t :inherit font-lock-keyword-face :weight bold))
-  "Face used for the author name in the annotation posframe header.")
+  "Face used for the author name in the annotation posframe header."
+  :group 'reviewer)
 
 (defface reviewer-posframe-time-face
   '((t :inherit font-lock-comment-face))
-  "Face used for the timestamp in the annotation posframe header.")
+  "Face used for the timestamp in the annotation posframe header."
+  :group 'reviewer)
+
+(defcustom reviewer-posframe-parameters
+  '(:border-width 2 :fringe 16 :min-width 40 :min-height 5)
+  "Geometry of the annotation posframe, as a plist.
+
+:BORDER-WIDTH  width in pixels of the border drawn around the posframe.
+:FRINGE        width in pixels of the blank margin posframe leaves on
+               the left and right inside the frame's edge -- the same
+               idea as a window's fringe, just applied to this popup
+               frame instead.
+:MIN-WIDTH     minimum width of the posframe, in characters.
+:MIN-HEIGHT    minimum height of the posframe, in lines."
+  :type '(plist :key-type (choice (const :border-width) (const :fringe)
+                                   (const :min-width) (const :min-height))
+                 :value-type integer)
+  :group 'reviewer)
 
 (defun reviewer--annotation-content (overlay)
   "Format annotation OVERLAY as an \"author (time)\" header plus its note."
@@ -234,18 +255,19 @@ TARGET is either an existing annotation overlay, or a list of
 (defun reviewer--display-annotation (content)
   "Display CONTENT via posframe if available, otherwise the echo area."
   (if (and (require 'posframe nil t) (posframe-workable-p))
-      (posframe-show reviewer--posframe-buffer
-                      :string (format "\n%s\n\n" content)
-                      :position (point)
-                      :background-color (face-attribute 'reviewer-posframe-face :background nil t)
-                      :foreground-color (face-attribute 'reviewer-posframe-face :foreground nil t)
-                      :internal-border-width 2
-                      :internal-border-color (face-attribute 'reviewer-posframe-border-face :foreground nil t)
-                      :left-fringe 16
-                      :right-fringe 16
-                      :min-width 40
-                      :min-height 5
-                      :accept-focus nil)
+      (let ((fringe (plist-get reviewer-posframe-parameters :fringe)))
+        (posframe-show reviewer--posframe-buffer
+                        :string (format "\n%s\n\n" content)
+                        :position (point)
+                        :background-color (face-attribute 'reviewer-posframe-face :background nil t)
+                        :foreground-color (face-attribute 'reviewer-posframe-face :foreground nil t)
+                        :internal-border-width (plist-get reviewer-posframe-parameters :border-width)
+                        :internal-border-color (face-attribute 'reviewer-posframe-border-face :foreground nil t)
+                        :left-fringe fringe
+                        :right-fringe fringe
+                        :min-width (plist-get reviewer-posframe-parameters :min-width)
+                        :min-height (plist-get reviewer-posframe-parameters :min-height)
+                        :accept-focus nil))
     (message "%s" content)))
 
 (defun reviewer--hide-annotation-display ()
