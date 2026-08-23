@@ -11,7 +11,7 @@ not for submitting comments to a remote/forge. No persistence yet --
 annotations are session-local -- though the data is kept simple enough
 to serialize later if that's worth adding.
 
-[[./images/demo.gif]]
+https://github.com/user-attachments/assets/99aa946f-55a2-444f-8cae-292e24cfb378
 
 * Usage
 
