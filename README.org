@@ -62,7 +62,8 @@ customize group.
 The posframe's geometry is a single plist,
 ~reviewer-posframe-parameters~, with keys ~:border-width~, ~:fringe~ (blank
 margin left and right, in pixels -- same idea as a window's fringe),
-~:min-width~ (characters), and ~:min-height~ (lines).
+~:width~ (fixed width in characters -- long notes wrap instead of
+widening the frame), and ~:min-height~ (lines).
 
 ~reviewer-use-transient~ toggles the ~C-c r~ transient menu (see above),
 and ~reviewer-annotation-edit-buffer-action~ controls where the ~C-c r a~
@@ -76,7 +77,7 @@ A full sample config, combining installation with all of the above:
   :hook (after-init . reviewer-global-mode)
   :custom
   (reviewer-use-transient t)
-  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :min-width 40 :min-height 5))
+  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :width 40 :min-height 5))
   :custom-face
   (reviewer-highlight-face ((t :inherit highlight)))
   (reviewer-posframe-face ((t :inherit tooltip)))

@@ -15,8 +15,11 @@
 ;; deletes it.
 ;;
 ;; Annotations are overlays, session-local only -- no persistence yet.
-;; The data itself is just a buffer position range plus a string, kept
-;; deliberately plain so it can be serialized later without a redesign.
+;; The data itself is just a buffer position range plus a note, author,
+;; timestamp, status, and thread id, kept deliberately plain so it can
+;; be serialized later without a redesign.  The thread id in particular
+;; is meant to outlive the overlay: once persistence lands, it's what
+;; lets an annotation on a since-deleted region still be found.
 ;;
 ;; Rendering annotations (file, line number(s), quoted span, note) as
 ;; org for handing off to an agent is a separate, not-yet-written piece
@@ -64,6 +67,17 @@
   "Return the creation time of annotation OVERLAY, as a string."
   (overlay-get overlay 'reviewer-time))
 
+(defun reviewer-annotation-status (overlay)
+  "Return the status of annotation OVERLAY, e.g. \"open\" or \"resolved\"."
+  (overlay-get overlay 'reviewer-status))
+
+(defun reviewer-annotation-thread-id (overlay)
+  "Return the thread id of annotation OVERLAY.
+Assigned once, when the annotation is created, and stable across
+edits -- meant to keep identifying an annotation even after its region
+is deleted, once that's persisted."
+  (overlay-get overlay 'reviewer-thread-id))
+
 (defun reviewer--region-or-word-bounds ()
   "Return (START . END) for the active region, or the word at point."
   (if (use-region-p)
@@ -94,6 +108,10 @@ of (BUFFER START END) describing where to create a new one.")
   (set-window-configuration wconf)
   (kill-buffer buffer))
 
+(defun reviewer--generate-thread-id ()
+  "Return a new, likely-unique id for an annotation thread."
+  (format "%s-%04x" (format-time-string "%Y%m%dT%H%M%S") (random #x10000)))
+
 (defun reviewer-annotation-edit-finish ()
   "Save this buffer's text onto the annotation being edited, then close it.
 Deletes the annotation instead if the text was left empty."
@@ -112,6 +130,8 @@ Deletes the annotation instead if the text was left empty."
               (overlay-put ov 'reviewer-note text)
               (overlay-put ov 'reviewer-author (user-login-name))
               (overlay-put ov 'reviewer-time (format-time-string "%H:%M"))
+              (overlay-put ov 'reviewer-status "open")
+              (overlay-put ov 'reviewer-thread-id (reviewer--generate-thread-id))
               (overlay-put ov 'face 'reviewer-highlight-face)
               (overlay-put ov 'evaporate t))
             (deactivate-mark)))))))
@@ -230,7 +250,7 @@ TARGET is either an existing annotation overlay, or a list of
   :group 'reviewer)
 
 (defcustom reviewer-posframe-parameters
-  '(:border-width 2 :fringe 16 :min-width 40 :min-height 5)
+  '(:border-width 2 :fringe 16 :width 40 :min-height 5)
   "Geometry of the annotation posframe, as a plist.
 
 :BORDER-WIDTH  width in pixels of the border drawn around the posframe.
@@ -238,10 +258,11 @@ TARGET is either an existing annotation overlay, or a list of
                the left and right inside the frame's edge -- the same
                idea as a window's fringe, just applied to this popup
                frame instead.
-:MIN-WIDTH     minimum width of the posframe, in characters.
+:WIDTH         fixed width of the posframe, in characters; long notes
+               wrap instead of widening the frame.
 :MIN-HEIGHT    minimum height of the posframe, in lines."
   :type '(plist :key-type (choice (const :border-width) (const :fringe)
-                                   (const :min-width) (const :min-height))
+                                   (const :width) (const :min-height))
                  :value-type integer)
   :group 'reviewer)
 
@@ -265,7 +286,7 @@ TARGET is either an existing annotation overlay, or a list of
                         :internal-border-color (face-attribute 'reviewer-posframe-border-face :foreground nil t)
                         :left-fringe fringe
                         :right-fringe fringe
-                        :min-width (plist-get reviewer-posframe-parameters :min-width)
+                        :width (plist-get reviewer-posframe-parameters :width)
                         :min-height (plist-get reviewer-posframe-parameters :min-height)
                         :accept-focus nil))
     (message "%s" content)))
