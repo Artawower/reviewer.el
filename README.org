@@ -1,104 +1,64 @@
 #+TITLE: reviewer.el
 
-A minor mode for annotating a file or a diff (~C-c r a~ on a region or
-word, editable in place) without changing its content, then rendering
-those annotations as a plain org buffer -- file, line number(s), the
-quoted span, and the note -- instead of injecting comments into the
-source or exporting a hard-to-read diff.
-
-Built for handing local review notes to an agent (e.g. [[https://github.com/xenodium/agent-shell][agent-shell]]),
-not for submitting comments to a remote/forge. No persistence yet --
-annotations are session-local -- though the data is kept simple enough
-to serialize later if that's worth adding.
+reviewer.el is a minor mode for annotating a file, diff, or any Emacs
+buffer without changing its content. Annotate a region or word, edit
+the note in place, and render all of a buffer's annotations as a
+plain org document -- file, line number(s), the quoted span, and the
+note -- for your own reference or to hand off to an agent (for
+example, [[https://github.com/xenodium/agent-shell][agent-shell]]) working on the same code.
 
 https://github.com/user-attachments/assets/99aa946f-55a2-444f-8cae-292e24cfb378
 
 * Usage
 
-All commands live under the ~C-c r~ prefix, which by default (see
-~reviewer-use-transient~ below) pops up a transient menu.
+- ~reviewer-annotate~ :: Annotate the active region (or word at
+  point), or edit the note on an existing annotation at point. A
+  small =*reviewer-annotation*= buffer pops up to edit the note text:
+  finish editing to save it (clearing the text deletes the annotation
+  instead), or abort to cancel.
+- ~reviewer-show-annotation-at-point~ :: Show the annotation at point
+  in a posframe (author, time, note), until the next command. Falls
+  back to the echo area if [[https://github.com/tumashu/posframe][posframe]] isn't installed.
+- ~reviewer-delete-annotation-at-point~ :: Delete the annotation at
+  point.
+- ~reviewer-delete-region-annotations~ :: Delete all annotations
+  overlapping the active region.
+- ~reviewer-clear-annotations~ :: Delete all annotations in the
+  current buffer.
+- ~reviewer-render~ :: Render all annotations in the buffer as an org
+  file in =/tmp/=, displayed in a =*reviewer:file*= buffer.
+  ~reviewer-render-next-annotation~ and
+  ~reviewer-render-previous-annotation~ move between entries there.
+- ~reviewer-yank-render~ :: Render annotations and copy the result to
+  the kill ring, without displaying the render buffer.
+- ~reviewer-yank-render-file-name~ :: Render annotations to =/tmp/=
+  and copy the render file's path to the kill ring.
 
-- ~C-c r a~ :: Annotate the active region (or word at point). On an
-  existing annotation, edit its note instead. Either way, a small
-  =*reviewer-annotation*= buffer pops up to edit the note text in --
-  ~C-c C-c~ saves (clearing the text deletes the annotation), ~C-c C-k~
-  cancels. Customize placement via
-  ~reviewer-annotation-edit-buffer-action~, or an entry in
-  ~display-buffer-alist~ keyed on the buffer name.
-- ~C-c r s~ :: Show the annotation at point in a posframe (author,
-  time, note), until the next command. Falls back to the echo area if
-  [[https://github.com/tumashu/posframe][posframe]] isn't installed.
-- ~C-c r x~ :: Delete the annotation at point.
-- ~C-c r k~ :: Delete all annotations overlapping the active region.
-- ~C-c r c~ :: Delete all annotations in the current buffer.
-- ~C-c r r~ :: Render all annotations in the buffer as an org file in
-  =/tmp/=, in a =*reviewer:file*= buffer. In the rendered buffer, ~n~/~p~ move
-  between annotations and ~q~ quits.
-- ~C-c r y~ :: Render annotations and copy the result to the kill
-  ring, without displaying the render buffer.
-- ~C-c r e~ :: Render annotations to =/tmp/= and copy the render
-  file's path to the kill ring.
-
-~reviewer-global-mode~ turns ~reviewer-mode~ on in every buffer.
+All of the above are ordinary interactive commands: call them with
+~M-x~, or bind them to whatever keys you prefer.
 
 ** Transient menu
 
-~C-c r~ opens a transient menu (via [[https://github.com/magit/transient][transient]]) listing all of the above
-under "review" (annotation commands) and "summarize" (render
-commands). Set ~reviewer-use-transient~ to ~nil~ to disable the popup and
-make ~C-c r~ a plain prefix key instead -- e.g. ~C-c r a~ dispatches
-straight to ~reviewer-annotate~ with no menu shown.
+reviewer-mode binds a default prefix key that opens a transient menu
+(via [[https://github.com/magit/transient][transient]]) listing all of the commands above, grouped into
+"review" (annotation commands) and "summarize" (render commands). Set
+~reviewer-use-transient~ to ~nil~ to make that prefix a plain keymap
+instead, dispatching straight to each command with no menu shown.
 
 [[./images/transient.gif]]
 
-** Customization
-
-The annotated region is highlighted with ~reviewer-highlight-face~,
-and the posframe from ~C-c r s~ with ~reviewer-posframe-face~ (body),
-~reviewer-posframe-border-face~ (border), ~reviewer-posframe-author-face~
-and ~reviewer-posframe-time-face~ (header). All are under the ~reviewer~
-customize group.
-
-The posframe's geometry is a single plist,
-~reviewer-posframe-parameters~, with keys ~:border-width~, ~:fringe~ (blank
-margin left and right, in pixels -- same idea as a window's fringe),
-~:width~ (fixed width in characters -- long notes wrap instead of
-widening the frame), and ~:min-height~ (lines).
-
-~reviewer-use-transient~ toggles the ~C-c r~ transient menu (see above),
-and ~reviewer-annotation-edit-buffer-action~ controls where the ~C-c r a~
-edit buffer pops up.
-
-A full sample config, combining installation with all of the above:
-
-#+BEGIN_SRC emacs-lisp
-(use-package reviewer
-  :straight (reviewer :type git :host github :repo "SreenivasVRao/reviewer.el")
-  :hook (after-init . reviewer-global-mode)
-  :custom
-  (reviewer-use-transient t)
-  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :width 40 :min-height 5))
-  :custom-face
-  (reviewer-highlight-face ((t :inherit highlight)))
-  (reviewer-posframe-face ((t :inherit tooltip)))
-  (reviewer-posframe-border-face ((t :foreground "orange")))
-  (reviewer-posframe-author-face ((t :inherit font-lock-keyword-face :weight bold)))
-  (reviewer-posframe-time-face ((t :inherit font-lock-comment-face)))
-  :init
-  (setq reviewer-annotation-edit-buffer-action
-        '((display-buffer-reuse-window display-buffer-below-selected)
-          (window-height . 20))))
-#+END_SRC
-
 * Installation
 
-** straight.el + use-package
+** straight.el and use-package
 
 #+BEGIN_SRC emacs-lisp
 (use-package reviewer
   :straight (reviewer :type git :host github :repo "SreenivasVRao/reviewer.el")
   :hook (after-init . reviewer-global-mode))
 #+END_SRC
+
+~reviewer-global-mode~ turns on ~reviewer-mode~ in every buffer; hook
+it to a single major mode instead if you'd rather opt in per-buffer.
 
 For a local checkout instead of pulling from GitHub, use
 ~:local-repo~:
@@ -125,32 +85,76 @@ In =config.el=:
   :hook (after-init . reviewer-global-mode))
 #+END_SRC
 
+** Configuration
+
+reviewer.el exposes these knobs, all under the ~reviewer~ customize
+group:
+
+- ~reviewer-highlight-face~ :: Face for the annotated region.
+- ~reviewer-posframe-face~, ~reviewer-posframe-border-face~,
+  ~reviewer-posframe-author-face~, ~reviewer-posframe-time-face~ ::
+  Faces for the body, border, and header (author/time) of the
+  posframe shown by ~reviewer-show-annotation-at-point~.
+- ~reviewer-posframe-parameters~ :: A plist controlling the
+  posframe's geometry: ~:border-width~, ~:fringe~ (the blank margin
+  left and right, in pixels -- the same idea as a window's fringe),
+  ~:width~ (fixed width in characters -- long notes wrap instead of
+  widening the frame), and ~:min-height~ (lines).
+- ~reviewer-use-transient~ :: Whether the default prefix key opens
+  the transient menu (see above) or a plain keymap.
+- ~reviewer-annotation-edit-buffer-action~ :: Where the note-editing
+  buffer from ~reviewer-annotate~ pops up.
+
+A full sample configuration, documenting each of these:
+
+#+BEGIN_SRC emacs-lisp
+(use-package reviewer
+  :straight (reviewer :type git :host github :repo "SreenivasVRao/reviewer.el")
+  :hook (after-init . reviewer-global-mode)
+  :custom
+  ;; Show a transient menu on the prefix key instead of a plain keymap.
+  (reviewer-use-transient t)
+  ;; Geometry of the posframe used to show an annotation at point.
+  (reviewer-posframe-parameters '(:border-width 2 :fringe 16 :width 40 :min-height 5))
+  :custom-face
+  ;; Highlight for the annotated region itself.
+  (reviewer-highlight-face ((t :inherit highlight)))
+  ;; Posframe body, border, and header faces.
+  (reviewer-posframe-face ((t :inherit tooltip)))
+  (reviewer-posframe-border-face ((t :foreground "orange")))
+  (reviewer-posframe-author-face ((t :inherit font-lock-keyword-face :weight bold)))
+  (reviewer-posframe-time-face ((t :inherit font-lock-comment-face)))
+  :init
+  ;; Pop the note-editing buffer up below the current window.
+  (setq reviewer-annotation-edit-buffer-action
+        '((display-buffer-reuse-window display-buffer-below-selected)
+          (window-height . 20))))
+#+END_SRC
+
 * Status
 
-~reviewer-mode~ (create/edit/show annotations) and the org renderer
-are both in place. No persistence across sessions yet.
+~reviewer-mode~ (create, edit, and show annotations) and the org
+renderer are both in place. There's no persistence across sessions
+yet.
 
 * Comparison to related packages
 
 ** forge, lgtm.el, github-review, code-review
 
-These all assume the thing under review is a pull request on a forge
-(GitHub/GitLab/Bitbucket), and the endpoint is a remote submission --
-approve/reject/comment via API calls, backed by OAuth tokens,
-diff-hunk anchoring, and server-side threaded comments. reviewer.el
-has none of that: no PR, no token, no server. It works on any buffer
--- a plain file, a diff, whatever's open -- and its output is an
-org-mode dump meant to be read by a human or handed to an agent, not
-posted anywhere.
+These packages all assume the thing under review is a pull request on
+a forge (GitHub, GitLab, or Bitbucket) and that the endpoint is a
+remote submission -- approving, rejecting, or commenting through API
+calls, backed by OAuth tokens, diff-hunk anchoring, and server-side
+threaded comments. reviewer.el isn't trying to solve that problem: it's
+purely for commenting on buffers -- for your own reference, and to
+guide an agent while it writes or edits code.
 
 ** [[https://github.com/bastibe/annotate.el][annotate.el]]
 
-The closer relative: same principle of a region/word-triggered,
-in-place-editable annotation that leaves file content untouched.
-annotate.el persists annotations to a database across sessions,
-supports reply threads, and exports via its own markup format.
-reviewer.el is deliberately narrower: no
-persistence (session-local by design), no threading, and instead of a
-custom export markup, it renders straight to a plain org buffer meant
-for one-shot hand-off -- e.g. to an agent -- rather than long-term
-review storage.
+reviewer.el is similar in spirit to annotate.el: both are built around
+a region- or word-triggered, in-place-editable annotation that leaves
+the file's content untouched. annotate.el additionally persists
+annotations to a database across sessions and supports reply threads;
+reviewer.el adds a posframe for viewing an annotation at point and a
+transient menu for discovering commands, neither of which annotate.el
+has.
