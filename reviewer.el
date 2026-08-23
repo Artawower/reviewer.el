@@ -309,6 +309,20 @@ explicitly."
   (expand-file-name (format "reviewer-%s.org" (file-name-base file))
                     temporary-file-directory))
 
+(defun reviewer--buffer-label ()
+  "Return a human-readable label for the current buffer's annotation source.
+Prefers the visited file name; falls back to the magit repo (with the
+diffed commit, if any) for magit buffers, then the buffer name."
+  (let* ((magit-p (derived-mode-p 'magit-mode))
+         (repo    (and magit-p (fboundp 'magit-toplevel) (magit-toplevel)))
+         (commit  (and magit-p (reviewer--magit-commit))))
+    (cond (buffer-file-name)
+          ((and repo commit)
+           (format "%s@%s" (directory-file-name repo)
+                   (substring commit 0 (min 8 (length commit)))))
+          (repo (directory-file-name repo))
+          (t (buffer-name)))))
+
 (defun reviewer-render-next-annotation ()
   "Move point to the next annotation heading."
   (interactive)
@@ -356,12 +370,7 @@ no annotations."
            (branch  (and magit-p (reviewer--magit-branch)))
            (head    (and magit-p (reviewer--magit-head)))
            (commit  (and magit-p (reviewer--magit-commit)))
-           (file    (cond (buffer-file-name)
-                           ((and repo commit)
-                            (format "%s@%s" (directory-file-name repo)
-                                    (substring commit 0 (min 8 (length commit)))))
-                           (repo (directory-file-name repo))
-                           (t (buffer-name))))
+           (file    (reviewer--buffer-label))
            (dir     default-directory)
            (lang    (reviewer--org-lang))
            (entries (mapcar (lambda (ov)
