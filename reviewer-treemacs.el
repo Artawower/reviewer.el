@@ -19,8 +19,12 @@
 ;; not two independent side windows that happen to be adjacent.
 ;;
 ;; Moving point onto a thread -- with n/p, arrows, or a mouse click --
-;; previews it in the detail pane immediately, no RET required.  RET
-;; instead jumps to the thread's source location; "r" on a thread opens
+;; previews it in the detail pane immediately, no RET required.  File
+;; nodes are just group headers, not independently selectable, so n/p
+;; skip over them straight to the next/previous thread; arrows and
+;; mouse clicks still land on them as ordinary treemacs branch nodes,
+;; e.g. to expand/collapse.  RET instead jumps to the thread's source
+;; location; "r" on a thread opens
 ;; a small reply pane, stacked below the other two, to append to it.
 ;; "q" kills the tree/detail buffers outright rather than just burying
 ;; them, so reopening always starts from a clean `treemacs-initialize'.
@@ -284,6 +288,33 @@ without waiting for RET."
       (if (and btn (treemacs-button-get btn :leaf))
           (reviewer-treemacs--show-detail (reviewer-treemacs--thread-detail btn) key)
         (reviewer-treemacs--show-detail reviewer-treemacs--placeholder-text)))))
+
+;; --- navigation ----------------------------------------------------------
+
+(defun reviewer-treemacs--move-to-leaf (move-fn)
+  "Call MOVE-FN, then keep calling it while point rests on a file node.
+File nodes are just group headers in this tree -- there's nothing to
+preview or act on for one -- so n/p should never leave point sitting
+on one; skip straight through to the next thread in that direction.
+Stops as soon as MOVE-FN stops making progress, so a file node with no
+threads under it (or the top/bottom of the tree) doesn't loop forever."
+  (let ((pos (point)))
+    (funcall move-fn 1)
+    (while (and (/= (point) pos)
+                (let ((btn (treemacs-current-button)))
+                  (and btn (not (treemacs-button-get btn :leaf)))))
+      (setq pos (point))
+      (funcall move-fn 1))))
+
+(defun reviewer-treemacs-next-line ()
+  "Move to the next thread in the tree, skipping over file nodes."
+  (interactive)
+  (reviewer-treemacs--move-to-leaf #'treemacs-next-line))
+
+(defun reviewer-treemacs-previous-line ()
+  "Move to the previous thread in the tree, skipping over file nodes."
+  (interactive)
+  (reviewer-treemacs--move-to-leaf #'treemacs-previous-line))
 
 ;; --- jump to source ------------------------------------------------------
 
@@ -553,7 +584,9 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
       :with-expand-depth 1)
     (reviewer-treemacs--local-keymap treemacs-mode-map
                                       `(("q" . reviewer-treemacs-toggle)
-                                        ("r" . reviewer-treemacs-reply-to-thread-at-point)))
+                                        ("r" . reviewer-treemacs-reply-to-thread-at-point)
+                                        ("n" . reviewer-treemacs-next-line)
+                                        ("p" . reviewer-treemacs-previous-line)))
     (add-hook 'post-command-hook #'reviewer-treemacs--preview-at-point nil t)))
 
 (defun reviewer-treemacs--close ()
