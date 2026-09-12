@@ -327,9 +327,15 @@ a thread is visually distinct."
    "\n\n"))
 
 (defun reviewer--display-annotation (content)
-  "Display CONTENT via posframe if available, otherwise the echo area."
+  "Display CONTENT via posframe if available, otherwise the echo area.
+Forces a redisplay first so posframe positions itself against point's
+actual on-screen location -- without it, a caller that just moved
+point somewhere off-screen (e.g. jumping to an annotation elsewhere in
+the buffer) gets a posframe placed using the window's stale,
+pre-scroll geometry instead of where point ends up."
   (if (and (require 'posframe nil t) (posframe-workable-p))
       (let ((fringe (plist-get reviewer-posframe-parameters :fringe)))
+        (redisplay t)
         (posframe-show reviewer--posframe-buffer
                         :string (format "\n%s\n\n" content)
                         :position (point)
