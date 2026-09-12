@@ -23,9 +23,18 @@
 ;; nodes are just group headers, not independently selectable, so n/p
 ;; skip over them straight to the next/previous thread; arrows and
 ;; mouse clicks still land on them as ordinary treemacs branch nodes,
-;; e.g. to expand/collapse.  RET instead jumps to the thread's source
-;; location; "r" on a thread opens
-;; a small reply pane, stacked below the other two, to append to it.
+;; e.g. to expand/collapse.  RET jumps to the thread's source location
+;; and shows it there too -- highlight, popup -- but by default leaves
+;; the tree window selected, so n/p keep driving straight through a
+;; string of threads without an explicit switch back; set
+;; `reviewer-treemacs-ret-moves-focus' non-nil to have RET switch
+;; focus there instead.  "o o" always jumps and switches focus
+;; regardless of that setting, "o v"/"o h" open it in a fresh
+;; vertical/horizontal split instead, and "o c" jumps then closes the
+;; tree/detail pane, mirroring vanilla treemacs's own "o" submap
+;; without the file-management variants that don't apply to a thread.
+;; "r" on a thread opens a small reply pane, stacked below the other
+;; two, to append to it.
 ;; "q" (or "C-g", bound the same in both panes) kills the tree/detail
 ;; buffers outright rather than just burying them, so reopening always
 ;; starts from a clean `treemacs-initialize'.  `reviewer-transient'
@@ -71,6 +80,15 @@ Real `reviewer-mode' annotations have no separate title -- just note
 text -- so the tree label is always a summary of the root note, never
 the note in full."
   :type 'integer
+  :group 'reviewer-treemacs)
+
+(defcustom reviewer-treemacs-ret-moves-focus nil
+  "Whether RET on a thread switches focus to its source location.
+When nil (the default), RET jumps to the thread's source and shows it
+there -- highlight, popup -- but leaves the tree window selected, so
+n/p keep driving straight through a string of threads.  When non-nil,
+RET instead switches focus there too, the same as \"o o\"."
+  :type 'boolean
   :group 'reviewer-treemacs)
 
 (defconst reviewer-treemacs--tree-buffer "*reviewer-tree*"
@@ -366,8 +384,24 @@ window the user was last working in instead of leaving the choice to
         (progn (select-window window) (switch-to-buffer buf))
       (pop-to-buffer buf))))
 
-(defun reviewer-treemacs--jump-to-context (btn)
+(defun reviewer-treemacs--visit-file-split (path side)
+  "Visit PATH in a new window, splitting on SIDE (`right' or `below').
+Splits `reviewer-treemacs--main-window' when there is one, so the new
+window lands next to the user's actual working window rather than
+next to the tree/detail pane; falls back to `reviewer-treemacs--visit-file'
+when there's no other window to split."
+  (let ((window (reviewer-treemacs--main-window)))
+    (if (not window)
+        (reviewer-treemacs--visit-file path)
+      (select-window (split-window window nil side))
+      (switch-to-buffer (find-file-noselect path)))))
+
+(defun reviewer-treemacs--jump-to-context (btn &optional visit-fn)
   "Jump to thread node BTN's source location and highlight it there.
+VISIT-FN opens the resolved file path, defaulting to
+`reviewer-treemacs--visit-file'; callers pass an alternative to open it
+elsewhere instead, e.g. a fresh split.
+
 Best-effort stand-in for real annotation jumping: the file is resolved
 relative to `default-directory' and the context is just a literal
 search string, since the dummy data has no real buffer/position to
@@ -379,7 +413,7 @@ own highlight and position."
          (path (expand-file-name file default-directory)))
     (unless (file-exists-p path)
       (user-error "%s doesn't exist -- dummy data only" file))
-    (reviewer-treemacs--visit-file path)
+    (funcall (or visit-fn #'reviewer-treemacs--visit-file) path)
     (unless reviewer-mode (reviewer-mode 1))
     (goto-char (point-min))
     (if (and context (search-forward context nil t))
@@ -391,14 +425,64 @@ own highlight and position."
       (add-hook 'pre-command-hook #'reviewer--hide-annotation-display-once nil t))))
 
 (defun reviewer-treemacs--visit-annotation (&optional _arg)
-  "Jump to the source location of the thread node at point; a `:ret-action'."
+  "Jump to the source location of the thread node at point, switching
+focus to it; an \"o o\" binding."
   (interactive)
   (when-let* ((btn (treemacs-current-button)))
     (reviewer-treemacs--jump-to-context btn)))
 
+(defun reviewer-treemacs--peek-annotation (&optional _arg)
+  "Show the source location of the thread node at point, without
+leaving the tree window selected; a `:ret-action'.
+Runs the same jump as `reviewer-treemacs--visit-annotation' -- visit
+the file, highlight the context span, pop up the annotation -- but
+wrapped in `save-selected-window' so the tree stays selected
+afterward and n/p keep driving straight through a string of threads."
+  (interactive)
+  (when-let* ((btn (treemacs-current-button)))
+    (save-selected-window
+      (reviewer-treemacs--jump-to-context btn))))
+
+(defun reviewer-treemacs--ret-annotation (&optional arg)
+  "Jump to the source location of the thread node at point; a `:ret-action'.
+Dispatches to `reviewer-treemacs--visit-annotation' or
+`reviewer-treemacs--peek-annotation' depending on
+`reviewer-treemacs-ret-moves-focus'."
+  (interactive)
+  (if reviewer-treemacs-ret-moves-focus
+      (reviewer-treemacs--visit-annotation arg)
+    (reviewer-treemacs--peek-annotation arg)))
+
 (defun reviewer-treemacs--visit-annotation-btn (btn)
   "Jump to the source location of BTN; a `:visit-action'."
   (reviewer-treemacs--jump-to-context btn))
+
+(defun reviewer-treemacs--thread-at-point ()
+  "Return the thread node button at point, or signal a `user-error'."
+  (let ((btn (treemacs-current-button)))
+    (unless (and btn (treemacs-button-get btn :leaf))
+      (user-error "No thread at point"))
+    btn))
+
+(defun reviewer-treemacs-open-vertical-split ()
+  "Jump to the thread at point's source, opened in a new vertical split."
+  (interactive)
+  (reviewer-treemacs--jump-to-context
+   (reviewer-treemacs--thread-at-point)
+   (lambda (path) (reviewer-treemacs--visit-file-split path 'right))))
+
+(defun reviewer-treemacs-open-horizontal-split ()
+  "Jump to the thread at point's source, opened in a new horizontal split."
+  (interactive)
+  (reviewer-treemacs--jump-to-context
+   (reviewer-treemacs--thread-at-point)
+   (lambda (path) (reviewer-treemacs--visit-file-split path 'below))))
+
+(defun reviewer-treemacs-open-and-close ()
+  "Jump to the thread at point's source, then close the tree/detail pane."
+  (interactive)
+  (reviewer-treemacs--jump-to-context (reviewer-treemacs--thread-at-point))
+  (reviewer-treemacs--close))
 
 ;; --- reply pane ------------------------------------------------------------
 
@@ -503,7 +587,7 @@ above -- so the detail pane can be refreshed by simply re-reading it."
   :icon "‣ "
   :label (propertize (reviewer-treemacs--item-summary item) 'face 'reviewer-treemacs-thread-face)
   :key (car item)
-  :ret-action #'reviewer-treemacs--visit-annotation
+  :ret-action #'reviewer-treemacs--ret-annotation
   :visit-action #'reviewer-treemacs--visit-annotation-btn)
 
 (treemacs-define-expandable-node-type reviewer-treemacs-file
@@ -589,7 +673,11 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
                                         ("C-g" . reviewer-treemacs-toggle)
                                         ("r" . reviewer-treemacs-reply-to-thread-at-point)
                                         ("n" . reviewer-treemacs-next-line)
-                                        ("p" . reviewer-treemacs-previous-line)))
+                                        ("p" . reviewer-treemacs-previous-line)
+                                        ("o o" . reviewer-treemacs--visit-annotation)
+                                        ("o v" . reviewer-treemacs-open-vertical-split)
+                                        ("o h" . reviewer-treemacs-open-horizontal-split)
+                                        ("o c" . reviewer-treemacs-open-and-close)))
     (add-hook 'post-command-hook #'reviewer-treemacs--preview-at-point nil t)))
 
 (defun reviewer-treemacs--close ()
