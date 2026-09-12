@@ -12,14 +12,16 @@
 ;; diff) without changing its content.  C-c r a creates an annotation
 ;; on the active region (or the word at point), and edits the
 ;; annotation under point if one already exists; clearing the text
-;; deletes it.
+;; deletes it.  C-c r R adds a reply to the thread at point instead of
+;; replacing the note.
 ;;
 ;; Annotations are overlays, session-local only -- no persistence yet.
 ;; The data itself is just a buffer position range plus a note, author,
-;; timestamp, status, and thread id, kept deliberately plain so it can
-;; be serialized later without a redesign.  The thread id in particular
-;; is meant to outlive the overlay: once persistence lands, it's what
-;; lets an annotation on a since-deleted region still be found.
+;; timestamp, status, thread id, and a list of replies, kept
+;; deliberately plain so it can be serialized later without a redesign.
+;; The thread id in particular is meant to outlive the overlay: once
+;; persistence lands, it's what lets an annotation on a since-deleted
+;; region still be found.
 ;;
 ;; Rendering annotations (file, line number(s), quoted span, note) as
 ;; org for handing off to an agent is a separate, not-yet-written piece
@@ -32,6 +34,7 @@
 (require 'thingatpt)
 (require 'org)
 (require 'transient)
+(require 'color)
 
 (defgroup reviewer nil
   "Annotate buffers without changing their content."
@@ -78,6 +81,11 @@ edits -- meant to keep identifying an annotation even after its region
 is deleted, once that's persisted."
   (overlay-get overlay 'reviewer-thread-id))
 
+(defun reviewer-annotation-replies (overlay)
+  "Return the replies on annotation OVERLAY's thread, oldest first.
+Each reply is a plist with :author, :time, and :text."
+  (overlay-get overlay 'reviewer-replies))
+
 (defun reviewer--region-or-word-bounds ()
   "Return (START . END) for the active region, or the word at point."
   (if (use-region-p)
@@ -97,8 +105,9 @@ precedence over this.")
 
 (defvar-local reviewer--edit-target nil
   "What `reviewer-annotation-edit-finish' saves this buffer's text onto.
-Either the overlay of an existing annotation being edited, or a list
-of (BUFFER START END) describing where to create a new one.")
+One of: the overlay of an existing annotation being edited; a list of
+\(BUFFER START END\) describing where to create a new one; or a cons
+of (reply . OVERLAY) to append a reply to an existing thread.")
 
 (defvar-local reviewer--edit-window-config nil
   "Window configuration to restore when this edit buffer is closed.")
@@ -114,15 +123,26 @@ of (BUFFER START END) describing where to create a new one.")
 
 (defun reviewer-annotation-edit-finish ()
   "Save this buffer's text onto the annotation being edited, then close it.
-Deletes the annotation instead if the text was left empty."
+Deletes the annotation instead if the text was left empty; a reply
+left empty is simply dropped instead."
   (interactive)
   (let ((text (string-trim (buffer-string)))
         (target reviewer--edit-target))
     (reviewer--edit-cleanup (current-buffer) reviewer--edit-window-config)
-    (if (overlayp target)
-        (if (string-empty-p text)
-            (delete-overlay target)
-          (overlay-put target 'reviewer-note text))
+    (cond
+     ((and (consp target) (eq (car target) 'reply))
+      (unless (string-empty-p text)
+        (let ((ov (cdr target)))
+          (overlay-put ov 'reviewer-replies
+                       (append (overlay-get ov 'reviewer-replies)
+                               (list (list :author (user-login-name)
+                                           :time (format-time-string "%H:%M")
+                                           :text text)))))))
+     ((overlayp target)
+      (if (string-empty-p text)
+          (delete-overlay target)
+        (overlay-put target 'reviewer-note text)))
+     (t
       (unless (string-empty-p text)
         (seq-let (buffer start end) target
           (with-current-buffer buffer
@@ -134,7 +154,7 @@ Deletes the annotation instead if the text was left empty."
               (overlay-put ov 'reviewer-thread-id (reviewer--generate-thread-id))
               (overlay-put ov 'face 'reviewer-highlight-face)
               (overlay-put ov 'evaporate t))
-            (deactivate-mark)))))))
+            (deactivate-mark))))))))
 
 (defun reviewer-annotation-edit-abort ()
   "Abandon this annotation edit without changing anything."
@@ -159,8 +179,7 @@ Deletes the annotation instead if the text was left empty."
 
 (defun reviewer--open-edit-buffer (target initial-text)
   "Pop up the annotation edit buffer for TARGET, pre-filled with INITIAL-TEXT.
-TARGET is either an existing annotation overlay, or a list of
-\(BUFFER START END\) for a not-yet-created one; see `reviewer--edit-target'."
+See `reviewer--edit-target' for the shapes TARGET can take."
   (let ((wconf (current-window-configuration)))
     (pop-to-buffer (get-buffer-create reviewer--edit-buffer-name)
                     reviewer-annotation-edit-buffer-action)
@@ -189,6 +208,14 @@ TARGET is either an existing annotation overlay, or a list of
     (if existing
         (reviewer--edit-annotation existing)
       (reviewer--create-annotation))))
+
+(defun reviewer-reply-to-annotation ()
+  "Add a reply to the annotation thread at point."
+  (interactive)
+  (let ((ov (reviewer--annotation-at (point))))
+    (unless ov
+      (user-error "No annotation at point"))
+    (reviewer--open-edit-buffer (cons 'reply ov) nil)))
 
 (defun reviewer-clear-annotations ()
   "Delete all annotations in the current buffer."
@@ -249,6 +276,16 @@ TARGET is either an existing annotation overlay, or a list of
   "Face used for the timestamp in the annotation posframe header."
   :group 'reviewer)
 
+(defun reviewer--author-color (author)
+  "Return a hex color string deterministically derived from AUTHOR.
+Same AUTHOR name always yields the same color, so each participant in
+a thread stays visually distinct across annotations without needing
+to store a color anywhere.  Saturation and lightness are fixed and
+only the hue varies, so every author's color stays readable against
+the posframe background."
+  (let ((hue (/ (float (mod (sxhash-equal author) 360)) 360.0)))
+    (apply #'color-rgb-to-hex (append (color-hsl-to-rgb hue 0.55 0.6) (list 2)))))
+
 (defcustom reviewer-posframe-parameters
   '(:border-width 2 :fringe 16 :width 40 :min-height 5)
   "Geometry of the annotation posframe, as a plist.
@@ -266,12 +303,28 @@ TARGET is either an existing annotation overlay, or a list of
                  :value-type integer)
   :group 'reviewer)
 
-(defun reviewer--annotation-content (overlay)
-  "Format annotation OVERLAY as an \"author (time)\" header plus its note."
-  (concat (propertize (reviewer-annotation-author overlay) 'face 'reviewer-posframe-author-face)
+(defun reviewer--format-thread-entry (author time text)
+  "Format one thread entry as an \"author (time)\" header plus TEXT.
+AUTHOR is colored via `reviewer--author-color' so each participant in
+a thread is visually distinct."
+  (concat (propertize author 'face (list :inherit 'reviewer-posframe-author-face
+                                          :foreground (reviewer--author-color author)))
           " "
-          (propertize (format "(%s)" (reviewer-annotation-time overlay)) 'face 'reviewer-posframe-time-face)
-          "\n\n" (reviewer-annotation-text overlay)))
+          (propertize (format "(%s)" time) 'face 'reviewer-posframe-time-face)
+          "\n" text))
+
+(defun reviewer--annotation-content (overlay)
+  "Format annotation OVERLAY's whole thread: its note, then any replies."
+  (string-join
+   (cons (reviewer--format-thread-entry (reviewer-annotation-author overlay)
+                                         (reviewer-annotation-time overlay)
+                                         (reviewer-annotation-text overlay))
+         (mapcar (lambda (reply)
+                   (reviewer--format-thread-entry (plist-get reply :author)
+                                                   (plist-get reply :time)
+                                                   (plist-get reply :text)))
+                 (reviewer-annotation-replies overlay)))
+   "\n\n"))
 
 (defun reviewer--display-annotation (content)
   "Display CONTENT via posframe if available, otherwise the echo area."
@@ -417,12 +470,13 @@ no annotations."
            (dir     default-directory)
            (lang    (reviewer--org-lang))
            (entries (mapcar (lambda (ov)
-                              (list :range (reviewer--line-range ov)
-                                    :text  (buffer-substring-no-properties
-                                            (overlay-start ov) (overlay-end ov))
-                                    :note  (reviewer-annotation-text ov)
-                                    :file  (and magit-p (reviewer--magit-file-at
-                                                          (overlay-start ov)))))
+                              (list :range   (reviewer--line-range ov)
+                                    :text    (buffer-substring-no-properties
+                                              (overlay-start ov) (overlay-end ov))
+                                    :note    (reviewer-annotation-text ov)
+                                    :replies (reviewer-annotation-replies ov)
+                                    :file    (and magit-p (reviewer--magit-file-at
+                                                            (overlay-start ov)))))
                             annotations))
            (out     (get-buffer-create (format "*reviewer:%s*" (file-name-nondirectory file)))))
       (with-current-buffer out
@@ -451,7 +505,11 @@ no annotations."
                                (format "%s: %s" (plist-get entry :file) (plist-get entry :range))
                              (plist-get entry :range))))
           (insert (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n\n" lang (plist-get entry :text)))
-          (insert (format "** Note\n\n%s\n\n" (plist-get entry :note))))
+          (insert (format "** Note\n\n%s\n\n" (plist-get entry :note)))
+          (dolist (reply (plist-get entry :replies))
+            (insert (format "** Reply (%s, %s)\n\n%s\n\n"
+                             (plist-get reply :author) (plist-get reply :time)
+                             (plist-get reply :text)))))
         (setq reviewer--render-path (reviewer--render-file file))
         (write-region (point-min) (point-max) reviewer--render-path)
         (set-buffer-modified-p nil)
@@ -484,6 +542,7 @@ Unlike `reviewer-render', the render buffer is created but not displayed."
 (defvar reviewer-command-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "a") #'reviewer-annotate)
+    (define-key map (kbd "R") #'reviewer-reply-to-annotation)
     (define-key map (kbd "r") #'reviewer-render)
     (define-key map (kbd "s") #'reviewer-show-annotation-at-point)
     (define-key map (kbd "e") #'reviewer-yank-render-file-name)
@@ -502,6 +561,7 @@ bound to `reviewer-transient' instead.")
   ["reviewer-mode\n"
    ["review"
     ("a" "annotate region"              reviewer-annotate)
+    ("R" "reply to annotation"          reviewer-reply-to-annotation)
     ("s" "view annotation"              reviewer-show-annotation-at-point)
     ("x" "delete annotation"            reviewer-delete-annotation-at-point)
     ("k" "clear annotations in region"   reviewer-delete-region-annotations)
