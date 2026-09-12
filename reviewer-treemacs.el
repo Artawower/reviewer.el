@@ -26,9 +26,10 @@
 ;; e.g. to expand/collapse.  RET instead jumps to the thread's source
 ;; location; "r" on a thread opens
 ;; a small reply pane, stacked below the other two, to append to it.
-;; "q" kills the tree/detail buffers outright rather than just burying
-;; them, so reopening always starts from a clean `treemacs-initialize'.
-;; `reviewer-transient' also gets a "t" suffix for the same toggle.
+;; "q" (or "C-g", bound the same in both panes) kills the tree/detail
+;; buffers outright rather than just burying them, so reopening always
+;; starts from a clean `treemacs-initialize'.  `reviewer-transient'
+;; also gets a "t" suffix for the same toggle.
 ;;
 ;; This is a skeleton: the tree currently renders placeholder data
 ;; (`reviewer-treemacs--dummy-data'), not real `reviewer-mode'
@@ -274,7 +275,8 @@ yet), the pane keeps its generic default name."
     ;; buffer-local variables via `kill-all-local-variables'.
     (setq truncate-lines nil)
     (reviewer-treemacs--local-keymap (current-local-map)
-                                      '(("q" . reviewer-treemacs-toggle)))))
+                                      '(("q" . reviewer-treemacs-toggle)
+                                        ("C-g" . reviewer-treemacs-toggle)))))
 
 (defun reviewer-treemacs--preview-at-point ()
   "Preview the thread at point in the detail pane as the cursor moves.
@@ -584,6 +586,7 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
       :with-expand-depth 1)
     (reviewer-treemacs--local-keymap treemacs-mode-map
                                       `(("q" . reviewer-treemacs-toggle)
+                                        ("C-g" . reviewer-treemacs-toggle)
                                         ("r" . reviewer-treemacs-reply-to-thread-at-point)
                                         ("n" . reviewer-treemacs-next-line)
                                         ("p" . reviewer-treemacs-previous-line)))
