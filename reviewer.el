@@ -595,6 +595,28 @@ one of the individual command keys bound in `reviewer-command-map'."
   :group 'reviewer
   :set #'reviewer--set-use-transient)
 
+(defun reviewer--set-enable-treemacs (symbol value)
+  "Set SYMBOL to VALUE, requiring `reviewer-treemacs' when VALUE is non-nil.
+Loading it is what makes it append its own \"t\" toggle suffix to
+`reviewer-transient' -- see `reviewer-treemacs's Commentary.  There's
+no matching un-require when VALUE is set back to nil, since Emacs
+can't cleanly unload a feature; that suffix, once added, stays added
+for the rest of the session."
+  (set-default symbol value)
+  (when value
+    (require 'reviewer-treemacs)))
+
+(defcustom reviewer-enable-treemacs nil
+  "Whether to enable the treemacs tree/detail view for `reviewer-mode'.
+Treemacs is a much heavier dependency than the mode's other optional
+integrations (posframe, magit), so `reviewer-treemacs' stays unloaded
+-- and `reviewer-transient' shows no \"t\" toggle suffix for it --
+until this is turned on, e.g. via `setopt' or a `:custom' entry in
+`use-package'."
+  :type 'boolean
+  :group 'reviewer
+  :set #'reviewer--set-enable-treemacs)
+
 (defvar reviewer-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c r")
