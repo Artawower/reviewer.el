@@ -40,11 +40,14 @@
 ;; starts from a clean `treemacs-initialize'.  `reviewer-transient'
 ;; also gets a "t" suffix for the same toggle.
 ;;
-;; This is a skeleton: the tree currently renders placeholder data
-;; (`reviewer-treemacs--dummy-data'), not real `reviewer-mode'
-;; annotations.  Wiring it to `reviewer-all-annotations' across project
-;; buffers is the next step, once the layout and interactions are
-;; confirmed to feel right.
+;; The tree groups every live buffer with at least one annotation --
+;; found by scanning `(buffer-list)' and calling
+;; `reviewer-all-annotations' in each -- under a file/buffer label from
+;; `reviewer-treemacs--buffer-label', with each annotation's overlay
+;; itself as the thread node underneath.  That's rebuilt fresh each
+;; time the pane opens, so edits, replies, and new annotations made
+;; elsewhere are picked up on the next toggle; there's no live refresh
+;; while the pane is already open.
 ;;
 ;; Not loaded by `reviewer.el' itself -- treemacs is a much heavier
 ;; dependency than the mode's other optional integrations (posframe,
@@ -110,79 +113,52 @@ object rather than a fixed name, e.g. via `get-buffer-window'.")
           (generate-new-buffer reviewer-treemacs--detail-buffer-default-name)))
   reviewer-treemacs--detail-buf)
 
-;; --- placeholder data ------------------------------------------------------
-;; Skeleton only: (FILE (LABEL :context CONTEXT :entries ENTRIES) ...)
-;; tuples standing in for `reviewer-all-annotations' until this is wired
-;; to real annotations.  ENTRIES is a list of (:author :time :text)
-;; plists, oldest first -- the same shape as a root note plus its
-;; `reviewer-annotation-replies'.  CONTEXT is a literal substring of
-;; FILE to jump to on RET; nil if there's nothing worth searching for.
-;; Once wired to real annotations, CONTEXT goes away and RET instead
-;; jumps straight to the annotation's own overlay.
+;; --- annotation data -------------------------------------------------------
+;; The tree's data is (LABEL . OVERLAYS) tuples, one per distinct LABEL
+;; with at least one annotation: LABEL from `reviewer-treemacs--buffer-label',
+;; OVERLAYS the merged `reviewer-all-annotations' of every buffer that
+;; maps to it -- so each thread node's underlying item is a real
+;; annotation overlay, not a copy of its data.
 
-(defvar reviewer-treemacs--dummy-data
-  '(("reviewer.el"
-     ("Do we still need this require?"
-      :context "(require 'color)"
-      :entries ((:author "sreenivas" :time "09:58"
-                 :text "Do we still need this direct require, or does color-hsl-to-rgb autoload it?")))
-     ("Overlapping annotations?"
-      :context "(defun reviewer--annotation-at (pos)"
-      :entries ((:author "sreenivas" :time "10:02"
-                 :text "Should this also handle multiple overlapping annotations under point?")
-                (:author "reviewer-bot" :time "10:05"
-                 :text "`overlays-at` just returns whichever the buffer happens to store first -- usually the most recently created one, but it's not guaranteed.")
-                (:author "sreenivas" :time "10:11"
-                 :text "Ok, not worth solving now -- annotations are single-user and session-local anyway.")))
-     ("Nit: docstring wording"
-      :context "Assigned once, when the annotation is created"
-      :entries ((:author "reviewer-bot" :time "12:14"
-                 :text "\"Assigned once, when the annotation is created\" reads a little awkwardly -- maybe \"Assigned when the annotation is first created\"?")))
-     ("Should replies bump the timestamp?"
-      :context "(defun reviewer-annotation-time (overlay)"
-      :entries ((:author "sreenivas" :time "12:40"
-                 :text "Right now `reviewer-annotation-time` only reflects the root note's creation time. Should a reply update some kind of \"last activity\" field?")
-                (:author "reviewer-bot" :time "12:42"
-                 :text "Could add a `reviewer-last-activity` overlay property, updated on every reply, separate from the immutable creation time. Keeps the two concerns distinct.")
-                (:author "sreenivas" :time "12:43"
-                 :text "Let's hold off until we actually sort threads by activity somewhere -- no consumer for it yet.")
-                (:author "reviewer-bot" :time "12:44"
-                 :text "Agreed, leaving as-is."))))
-    ("README.org"
-     ("Typo in setup section"
-      :context "straight.el and use-package"
-      :entries ((:author "sreenivas" :time "11:00"
-                 :text "There's a typo here: \"recieve\" should be \"receive\".")))
-     ("Missing use-package example for treemacs view"
-      :context "(use-package reviewer"
-      :entries ((:author "sreenivas" :time "11:15"
-                 :text "Once reviewer-treemacs.el is real, we should add a use-package block here showing how to enable it alongside reviewer-mode."))))
-    ("reviewer-treemacs.el"
-     ("Dummy data placement"
-      :context "placeholder data"
-      :entries ((:author "sreenivas" :time "21:30"
-                 :text "Just checking -- this dummy data block is clearly marked as throwaway, right? Don't want it surviving into the real wiring by accident.")
-                (:author "reviewer-bot" :time "21:31"
-                 :text "Yes, it's under the \"placeholder data\" section header and called out in the Commentary as the thing to replace next.")))
-     ("Side window slot ordering"
-      :context "(slot . 0)"
-      :entries ((:author "sreenivas" :time "21:40"
-                 :text "Is slot 0 always above slot 1 for a given side, regardless of side being left or right?")
-                (:author "reviewer-bot" :time "21:41"
-                 :text "Yes -- slot order is independent of which side the window is docked to; lower slot numbers are always closer to the frame edge, so slot 0 sits above slot 1 on both left and right.")))
-     ("Very short note"
-      :entries ((:author "sreenivas" :time "21:52" :text "lgtm"))))
-    ("no-file-buffer"
-     ("Annotation on a scratch buffer"
-      :entries ((:author "sreenivas" :time "22:05"
-                 :text "What should the tree show for annotations made in a buffer with no backing file, like *scratch*? Buffer name, presumably?"))))
-    ("very/long/nested/path/to/some-module.el"
-     ("Long file path wrapping"
-      :entries ((:author "sreenivas" :time "22:10"
-                 :text "This file label is going to be wider than the pane -- want to confirm long paths truncate or wrap sensibly instead of blowing out the tree width.")
-                (:author "reviewer-bot" :time "22:11"
-                 :text "Treemacs truncates with an ellipsis by default at the window edge rather than wrapping, so it should stay contained; worth eyeballing once real data is wired in.")))))
-  "Placeholder tree data until this is wired to real annotations.")
+(defun reviewer-treemacs--buffer-label ()
+  "Return this buffer's label for the reviewer tree.
+Deliberately its own thing rather than `reviewer--buffer-label' (used
+for org rendering, where a full path or repo@commit is more useful):
+a magit buffer -- status, diff, revision, log, stash, all diff-flavored
+under the hood -- is labeled \"git-diff <repo>:<worktree>\", <repo>
+being the repo root's directory name and <worktree> its current
+branch, or a short commit hash if HEAD is detached.  Every other
+buffer, file-visiting or not, is labeled by its own `buffer-name' --
+short rather than a full path, since it only has to be readable in a
+narrow side pane."
+  (if (derived-mode-p 'magit-mode)
+      (let* ((repo (and (fboundp 'magit-toplevel) (magit-toplevel)))
+             (commit (reviewer--magit-commit))
+             (worktree (or (reviewer--magit-branch)
+                           (and commit (substring commit 0 (min 8 (length commit))))
+                           "detached")))
+        (if repo
+            (format "git-diff %s:%s" (file-name-nondirectory (directory-file-name repo)) worktree)
+          (buffer-name)))
+    (buffer-name)))
+
+(defun reviewer-treemacs--collect-files ()
+  "Return (LABEL . OVERLAYS) for every live buffer with annotations.
+Buffers that map to the same `reviewer-treemacs--buffer-label' -- e.g.
+several magit buffers against the same repo and branch -- are merged
+into a single entry rather than colliding as separate tree nodes with
+the same key.  Sorted by LABEL for a stable tree order across
+rebuilds."
+  (let (files)
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when-let* ((annotations (reviewer-all-annotations)))
+          (let* ((label (reviewer-treemacs--buffer-label))
+                 (existing (assoc label files)))
+            (if existing
+                (setcdr existing (append (cdr existing) annotations))
+              (push (cons label annotations) files))))))
+    (sort files (lambda (a b) (string< (car a) (car b))))))
 
 ;; --- faces ---------------------------------------------------------------
 
@@ -200,40 +176,33 @@ indentation and icon."
   :group 'reviewer-treemacs)
 
 ;; --- thread data accessors -------------------------------------------------
-;; All read from the button's automatically-stored `:item' (the literal
-;; (LABEL :context ... :entries ...) tuple from `reviewer-treemacs--dummy-data')
-;; and `:path' (the key chain from the root down to this node) -- so a
-;; reply appended in place via `reviewer-treemacs--append-reply' is
-;; immediately reflected wherever these are called again, with no
-;; separate refresh step.
+;; All read from the button's automatically-stored `:item' -- for a
+;; thread node, the annotation overlay itself, so a reply appended
+;; straight onto it via `reviewer-treemacs--append-reply' is immediately
+;; reflected wherever these are called again, with no separate refresh
+;; step.
 
 (defun reviewer-treemacs--item (btn)
-  "Return BTN's underlying `reviewer-treemacs--dummy-data' item.
+  "Return BTN's underlying item -- for a thread node, its annotation overlay.
 `treemacs-button-get' only works when the current buffer is BTN's own
 buffer, so this switches there first -- needed here since BTN is a
 marker that outlives the tree buffer being selected, e.g. once control
 reaches the reply pane or the detail pane."
   (treemacs-with-button-buffer btn (treemacs-button-get btn :item)))
 
-(defun reviewer-treemacs--path (btn)
-  "Return BTN's tree path.  See `reviewer-treemacs--item' for why."
-  (treemacs-with-button-buffer btn (treemacs-button-get btn :path)))
-
 (defun reviewer-treemacs--key (btn)
   "Return BTN's key.  See `reviewer-treemacs--item' for why."
   (treemacs-with-button-buffer btn (treemacs-button-get btn :key)))
 
 (defun reviewer-treemacs--thread-entries (btn)
-  "Return the replies list stored on thread node BTN's underlying item."
-  (plist-get (cdr (reviewer-treemacs--item btn)) :entries))
-
-(defun reviewer-treemacs--thread-context (btn)
-  "Return the search string used to jump to thread node BTN's source, if any."
-  (plist-get (cdr (reviewer-treemacs--item btn)) :context))
-
-(defun reviewer-treemacs--thread-file (btn)
-  "Return the file thread node BTN belongs to, from its tree path."
-  (nth 1 (reviewer-treemacs--path btn)))
+  "Return thread node BTN's entries: its root note, then replies, oldest first.
+Each entry is a plist with :author, :time, and :text -- the root note
+reshaped to match the shape of `reviewer-annotation-replies' already."
+  (let ((ov (reviewer-treemacs--item btn)))
+    (cons (list :author (reviewer-annotation-author ov)
+                :time (reviewer-annotation-time ov)
+                :text (reviewer-annotation-text ov))
+          (reviewer-annotation-replies ov))))
 
 (defun reviewer-treemacs--format-thread (entries)
   "Format ENTRIES (a thread's plists) the same way the posframe view does.
@@ -259,11 +228,11 @@ on a single tree line, then appends an ellipsis if still truncated."
       flat)))
 
 (defun reviewer-treemacs--item-summary (item)
-  "Return the tree label for thread ITEM: its root note, summarized.
+  "Return the tree label for thread ITEM, an annotation overlay: its
+root note, summarized.
 Takes the raw ITEM rather than a button, since node-type label forms
 only have that -- see the node type definitions below."
-  (reviewer-treemacs--summarize
-   (plist-get (car (plist-get (cdr item) :entries)) :text)))
+  (reviewer-treemacs--summarize (reviewer-annotation-text item)))
 
 ;; --- detail pane -------------------------------------------------------
 
@@ -276,10 +245,10 @@ only have that -- see the node type definitions below."
 
 (defun reviewer-treemacs--show-detail (text &optional key)
   "Show TEXT in the detail pane, named after thread KEY.
-Renames the pane to \"reviewer-thread-<KEY>\" so it's identifiable on
-its own -- a stand-in for the real `reviewer-annotation-thread-id'
-once this is wired to real annotations.  With no KEY (nothing selected
-yet), the pane keeps its generic default name."
+Renames the pane to \"reviewer-thread-<KEY>\" (KEY being the
+annotation's own `reviewer-annotation-thread-id') so it's identifiable
+on its own.  With no KEY (nothing selected yet), the pane keeps its
+generic default name."
   (with-current-buffer (reviewer-treemacs--detail-buffer)
     (rename-buffer (if key (format "reviewer-thread-%s" key)
                       reviewer-treemacs--detail-buffer-default-name)
@@ -338,35 +307,8 @@ threads under it (or the top/bottom of the tree) doesn't loop forever."
 
 ;; --- jump to source ------------------------------------------------------
 
-(defvar reviewer-treemacs--preview-overlay nil
-  "Overlay standing in for a real `reviewer-mode' annotation at the
-last-visited thread's context span.  Only one is ever live at a time,
-moved onto the newly visited span on each RET rather than accumulating
-one per visit.")
-
-(defun reviewer-treemacs--highlight-context (btn start end)
-  "Turn START..END in the current buffer into a real annotation overlay
-carrying thread node BTN's data.
-Giving it the same `reviewer-note' etc. properties a real annotation
-has -- not just `reviewer-highlight-face' -- is what makes ordinary
-`reviewer.el' commands (`reviewer-show-annotation-at-point',
-`reviewer-delete-annotation-at-point', ...) recognize and work on it
-afterwards, instead of reporting \"No annotation at point\"."
-  (unless (overlayp reviewer-treemacs--preview-overlay)
-    (setq reviewer-treemacs--preview-overlay (make-overlay start end)))
-  (move-overlay reviewer-treemacs--preview-overlay start end (current-buffer))
-  (let* ((entries (reviewer-treemacs--thread-entries btn))
-         (root (car entries)))
-    (overlay-put reviewer-treemacs--preview-overlay 'reviewer-note (plist-get root :text))
-    (overlay-put reviewer-treemacs--preview-overlay 'reviewer-author (plist-get root :author))
-    (overlay-put reviewer-treemacs--preview-overlay 'reviewer-time (plist-get root :time))
-    (overlay-put reviewer-treemacs--preview-overlay 'reviewer-status "open")
-    (overlay-put reviewer-treemacs--preview-overlay 'reviewer-thread-id (reviewer-treemacs--key btn))
-    (overlay-put reviewer-treemacs--preview-overlay 'reviewer-replies (cdr entries))
-    (overlay-put reviewer-treemacs--preview-overlay 'face 'reviewer-highlight-face)))
-
 (defun reviewer-treemacs--main-window ()
-  "Return a window to open a visited annotation's file in, or nil.
+  "Return a window to open a visited annotation's buffer in, or nil.
 The most-recently-used window that isn't dedicated -- i.e. not one of
 the tree/detail/reply side windows -- so RET reuses whatever \"main\"
 window the user was last working in instead of leaving the choice to
@@ -376,53 +318,38 @@ window the user was last working in instead of leaving the choice to
             (sort (window-list nil 'no-minibuf)
                   (lambda (a b) (> (window-use-time a) (window-use-time b))))))
 
-(defun reviewer-treemacs--visit-file (path)
-  "Visit PATH in `reviewer-treemacs--main-window', or split if none exists."
-  (let ((buf (find-file-noselect path))
-        (window (reviewer-treemacs--main-window)))
+(defun reviewer-treemacs--visit-buffer (buf)
+  "Visit BUF in `reviewer-treemacs--main-window', or split if none exists."
+  (let ((window (reviewer-treemacs--main-window)))
     (if window
         (progn (select-window window) (switch-to-buffer buf))
       (pop-to-buffer buf))))
 
-(defun reviewer-treemacs--visit-file-split (path side)
-  "Visit PATH in a new window, splitting on SIDE (`right' or `below').
+(defun reviewer-treemacs--visit-buffer-split (buf side)
+  "Visit BUF in a new window, splitting on SIDE (`right' or `below').
 Splits `reviewer-treemacs--main-window' when there is one, so the new
 window lands next to the user's actual working window rather than
-next to the tree/detail pane; falls back to `reviewer-treemacs--visit-file'
+next to the tree/detail pane; falls back to `reviewer-treemacs--visit-buffer'
 when there's no other window to split."
   (let ((window (reviewer-treemacs--main-window)))
     (if (not window)
-        (reviewer-treemacs--visit-file path)
+        (reviewer-treemacs--visit-buffer buf)
       (select-window (split-window window nil side))
-      (switch-to-buffer (find-file-noselect path)))))
+      (switch-to-buffer buf))))
 
 (defun reviewer-treemacs--jump-to-context (btn &optional visit-fn)
-  "Jump to thread node BTN's source location and highlight it there.
-VISIT-FN opens the resolved file path, defaulting to
-`reviewer-treemacs--visit-file'; callers pass an alternative to open it
-elsewhere instead, e.g. a fresh split.
-
-Best-effort stand-in for real annotation jumping: the file is resolved
-relative to `default-directory' and the context is just a literal
-search string, since the dummy data has no real buffer/position to
-jump to.  Once wired to `reviewer-all-annotations', this instead jumps
-straight to the annotation's own overlay, which already carries its
-own highlight and position."
-  (let* ((file (reviewer-treemacs--thread-file btn))
-         (context (reviewer-treemacs--thread-context btn))
-         (path (expand-file-name file default-directory)))
-    (unless (file-exists-p path)
-      (user-error "%s doesn't exist -- dummy data only" file))
-    (funcall (or visit-fn #'reviewer-treemacs--visit-file) path)
+  "Jump to thread node BTN's annotation and display it there.
+VISIT-FN opens the resolved buffer, defaulting to
+`reviewer-treemacs--visit-buffer'; callers pass an alternative to open
+it elsewhere instead, e.g. a fresh split."
+  (let* ((ov (reviewer-treemacs--item btn))
+         (buf (overlay-buffer ov)))
+    (unless buf
+      (user-error "This annotation no longer exists"))
+    (funcall (or visit-fn #'reviewer-treemacs--visit-buffer) buf)
     (unless reviewer-mode (reviewer-mode 1))
-    (goto-char (point-min))
-    (if (and context (search-forward context nil t))
-        (progn
-          (goto-char (match-beginning 0))
-          (reviewer-treemacs--highlight-context btn (match-beginning 0) (match-end 0))
-          (reviewer-show-annotation-at-point))
-      (reviewer--display-annotation (reviewer-treemacs--thread-detail btn))
-      (add-hook 'pre-command-hook #'reviewer--hide-annotation-display-once nil t))))
+    (goto-char (overlay-start ov))
+    (reviewer-show-annotation-at-point)))
 
 (defun reviewer-treemacs--visit-annotation (&optional _arg)
   "Jump to the source location of the thread node at point, switching
@@ -435,9 +362,9 @@ focus to it; an \"o o\" binding."
   "Show the source location of the thread node at point, without
 leaving the tree window selected; a `:ret-action'.
 Runs the same jump as `reviewer-treemacs--visit-annotation' -- visit
-the file, highlight the context span, pop up the annotation -- but
-wrapped in `save-selected-window' so the tree stays selected
-afterward and n/p keep driving straight through a string of threads."
+the buffer, pop up the annotation -- but wrapped in
+`save-selected-window' so the tree stays selected afterward and n/p
+keep driving straight through a string of threads."
   (interactive)
   (when-let* ((btn (treemacs-current-button)))
     (save-selected-window
@@ -469,14 +396,14 @@ Dispatches to `reviewer-treemacs--visit-annotation' or
   (interactive)
   (reviewer-treemacs--jump-to-context
    (reviewer-treemacs--thread-at-point)
-   (lambda (path) (reviewer-treemacs--visit-file-split path 'right))))
+   (lambda (buf) (reviewer-treemacs--visit-buffer-split buf 'right))))
 
 (defun reviewer-treemacs-open-horizontal-split ()
   "Jump to the thread at point's source, opened in a new horizontal split."
   (interactive)
   (reviewer-treemacs--jump-to-context
    (reviewer-treemacs--thread-at-point)
-   (lambda (path) (reviewer-treemacs--visit-file-split path 'below))))
+   (lambda (buf) (reviewer-treemacs--visit-buffer-split buf 'below))))
 
 (defun reviewer-treemacs-open-and-close ()
   "Jump to the thread at point's source, then close the tree/detail pane."
@@ -521,15 +448,11 @@ SAVED is an alist as returned by `reviewer-treemacs--save-heights'."
       (reviewer-treemacs--restore-heights saved))))
 
 (defun reviewer-treemacs--append-reply (btn text)
-  "Append TEXT as a reply, from the current user, to thread node BTN.
-Mutates BTN's `:item' in place -- see the note on thread data accessors
-above -- so the detail pane can be refreshed by simply re-reading it."
-  (let ((entries-cell (cdr (reviewer-treemacs--item btn))))
-    (plist-put entries-cell :entries
-               (append (plist-get entries-cell :entries)
-                       (list (list :author (user-login-name)
-                                   :time (format-time-string "%H:%M")
-                                   :text text))))))
+  "Append TEXT as a reply, from the current user, to thread node BTN's annotation.
+Appends straight onto BTN's `:item', the annotation overlay itself --
+see the note on thread data accessors above -- so the detail pane can
+be refreshed by simply re-reading it."
+  (reviewer--append-reply (reviewer-treemacs--item btn) (user-login-name) text))
 
 (defun reviewer-treemacs-reply-finish ()
   "Append this buffer's text as a reply, then close the reply pane."
@@ -586,7 +509,7 @@ above -- so the detail pane can be refreshed by simply re-reading it."
 (treemacs-define-leaf-node-type reviewer-treemacs-thread
   :icon "‣ "
   :label (propertize (reviewer-treemacs--item-summary item) 'face 'reviewer-treemacs-thread-face)
-  :key (car item)
+  :key (reviewer-annotation-thread-id item)
   :ret-action #'reviewer-treemacs--ret-annotation
   :visit-action #'reviewer-treemacs--visit-annotation-btn)
 
@@ -600,7 +523,7 @@ above -- so the detail pane can be refreshed by simply re-reading it."
 
 (treemacs-define-variadic-entry-node-type reviewer-treemacs-root
   :key 'reviewer-treemacs-root
-  :children reviewer-treemacs--dummy-data
+  :children (reviewer-treemacs--collect-files)
   :child-type 'reviewer-treemacs-file)
 
 ;; --- locked side-window pair --------------------------------------------
@@ -682,18 +605,14 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
 
 (defun reviewer-treemacs--close ()
   "Close the tree/detail pane pair, killing their buffers.
-Also closes the reply pane, if open, and clears the last visited
-thread's highlight."
+Also closes the reply pane, if open."
   (reviewer-treemacs--close-reply-window)
   (dolist (window (reviewer-treemacs--windows))
     (let ((buf (window-buffer window)))
       (reviewer-treemacs--unlock-window window)
       (delete-window window)
       (kill-buffer buf)))
-  (setq reviewer-treemacs--detail-buf nil)
-  (when (overlayp reviewer-treemacs--preview-overlay)
-    (delete-overlay reviewer-treemacs--preview-overlay))
-  (setq reviewer-treemacs--preview-overlay nil))
+  (setq reviewer-treemacs--detail-buf nil))
 
 ;;;###autoload
 (defun reviewer-treemacs-toggle ()

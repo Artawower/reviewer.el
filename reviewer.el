@@ -121,6 +121,14 @@ of (reply . OVERLAY) to append a reply to an existing thread.")
   "Return a new, likely-unique id for an annotation thread."
   (format "%s-%04x" (format-time-string "%Y%m%dT%H%M%S") (random #x10000)))
 
+(defun reviewer--append-reply (overlay author text)
+  "Append a reply by AUTHOR with TEXT to annotation OVERLAY's thread."
+  (overlay-put overlay 'reviewer-replies
+               (append (overlay-get overlay 'reviewer-replies)
+                       (list (list :author author
+                                   :time (format-time-string "%H:%M")
+                                   :text text)))))
+
 (defun reviewer-annotation-edit-finish ()
   "Save this buffer's text onto the annotation being edited, then close it.
 Deletes the annotation instead if the text was left empty; a reply
@@ -132,12 +140,7 @@ left empty is simply dropped instead."
     (cond
      ((and (consp target) (eq (car target) 'reply))
       (unless (string-empty-p text)
-        (let ((ov (cdr target)))
-          (overlay-put ov 'reviewer-replies
-                       (append (overlay-get ov 'reviewer-replies)
-                               (list (list :author (user-login-name)
-                                           :time (format-time-string "%H:%M")
-                                           :text text)))))))
+        (reviewer--append-reply (cdr target) (user-login-name) text)))
      ((overlayp target)
       (if (string-empty-p text)
           (delete-overlay target)
