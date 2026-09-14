@@ -35,6 +35,7 @@
 (require 'org)
 (require 'transient)
 (require 'color)
+(require 'project)
 
 (defgroup reviewer nil
   "Annotate buffers without changing their content."
@@ -267,6 +268,7 @@ See `reviewer--edit-target' for the shapes TARGET can take."
 (declare-function magit-file-at-point "magit-git")
 (declare-function magit-get-current-branch "magit-git")
 (declare-function magit-rev-parse "magit-git")
+(declare-function projectile-project-root "projectile")
 
 (defconst reviewer--posframe-buffer " *reviewer-posframe*"
   "Buffer used by posframe to display annotation text.")
@@ -471,72 +473,147 @@ diffed commit, if any) for magit buffers, then the buffer name."
 (defvar-local reviewer--render-path nil
   "Path of the /tmp/ org file this render buffer was persisted to.")
 
+(defun reviewer--buffer-entries ()
+  "Return this buffer's annotations as a list of plists for rendering.
+Each has :range, :text, :note, and :replies, plus :file -- the diff
+hunk's file, for a magit buffer's per-hunk annotations; nil
+otherwise."
+  (let ((magit-p (derived-mode-p 'magit-mode)))
+    (mapcar (lambda (ov)
+              (list :range   (reviewer--line-range ov)
+                    :text    (buffer-substring-no-properties
+                              (overlay-start ov) (overlay-end ov))
+                    :note    (reviewer-annotation-text ov)
+                    :replies (reviewer-annotation-replies ov)
+                    :file    (and magit-p (reviewer--magit-file-at
+                                            (overlay-start ov)))))
+            (reviewer-all-annotations))))
+
+(defun reviewer--insert-entries (entries lang level)
+  "Insert ENTRIES (as returned by `reviewer--buffer-entries') as org headings.
+LANG tags each entry's quoted span as an org src block; LEVEL is the
+heading depth for each entry's own heading (an integer, 1 for a
+top-level `*'), with a `Note'/`Reply' sub-heading one level deeper --
+so a single-buffer render can start entries at the top level while a
+multi-buffer one nests them under a `* <buffer>' heading instead."
+  (let ((stars (make-string level ?*))
+        (substars (make-string (1+ level) ?*)))
+    (dolist (entry entries)
+      (insert (format "%s %s\n\n" stars
+                       (if (plist-get entry :file)
+                           (format "%s: %s" (plist-get entry :file) (plist-get entry :range))
+                         (plist-get entry :range))))
+      (insert (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n\n" lang (plist-get entry :text)))
+      (insert (format "%s Note\n\n%s\n\n" substars (plist-get entry :note)))
+      (dolist (reply (plist-get entry :replies))
+        (insert (format "%s Reply (%s, %s)\n\n%s\n\n"
+                         substars (plist-get reply :author) (plist-get reply :time)
+                         (plist-get reply :text)))))))
+
 (defun reviewer--render-to-buffer ()
   "Render this buffer's annotations as org into a `*reviewer:...*' buffer.
 Return that buffer, left in `reviewer-render-mode' and also persisted
 to /tmp/ as a side effect, with that file's path in the returned
 buffer's `reviewer--render-path'.  Signals a `user-error' if there are
 no annotations."
-  (let ((annotations (reviewer-all-annotations)))
-    (unless annotations
-      (user-error "No annotations in this buffer"))
-    ;; Overlay positions only mean something in this buffer, so resolve
-    ;; everything derived from them here, before switching to OUT below.
-    (let* ((magit-p (derived-mode-p 'magit-mode))
-           (repo    (and magit-p (fboundp 'magit-toplevel) (magit-toplevel)))
-           (branch  (and magit-p (reviewer--magit-branch)))
-           (head    (and magit-p (reviewer--magit-head)))
-           (commit  (and magit-p (reviewer--magit-commit)))
-           (file    (reviewer--buffer-label))
-           (dir     default-directory)
-           (lang    (reviewer--org-lang))
-           (entries (mapcar (lambda (ov)
-                              (list :range   (reviewer--line-range ov)
-                                    :text    (buffer-substring-no-properties
-                                              (overlay-start ov) (overlay-end ov))
-                                    :note    (reviewer-annotation-text ov)
-                                    :replies (reviewer-annotation-replies ov)
-                                    :file    (and magit-p (reviewer--magit-file-at
-                                                            (overlay-start ov)))))
-                            annotations))
-           (out     (get-buffer-create (format "*reviewer:%s*" (file-name-nondirectory file)))))
-      (with-current-buffer out
-        (setq default-directory dir)
-        (setq buffer-file-name nil)
-        (setq buffer-read-only nil)
-        (erase-buffer)
-        (org-mode)
-        ;; default-directory intentionally doesn't match this buffer's
-        ;; (nonexistent) file, so path-based modeline styles would render
-        ;; garbage; fall back to a plain buffer-name display if available.
-        ;; Set after `org-mode' since major modes wipe non-permanent
-        ;; buffer-local variables via `kill-all-local-variables'.
-        (when (boundp 'doom-modeline-buffer-file-name-style)
-          (setq-local doom-modeline-buffer-file-name-style 'buffer-name))
-        (insert "#+STARTUP: showall\n")
-        (insert (format "#+TITLE: Review: %s\n" file))
-        (when repo (insert (format "#+REPO: %s\n" repo)))
-        (when branch (insert (format "#+BRANCH: %s\n" branch)))
-        (when head (insert (format "#+HEAD: %s\n" head)))
-        (when commit (insert (format "#+COMMIT: %s\n" commit)))
-        (insert "\n")
-        (dolist (entry entries)
-          (insert (format "* %s\n\n"
-                           (if (plist-get entry :file)
-                               (format "%s: %s" (plist-get entry :file) (plist-get entry :range))
-                             (plist-get entry :range))))
-          (insert (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n\n" lang (plist-get entry :text)))
-          (insert (format "** Note\n\n%s\n\n" (plist-get entry :note)))
-          (dolist (reply (plist-get entry :replies))
-            (insert (format "** Reply (%s, %s)\n\n%s\n\n"
-                             (plist-get reply :author) (plist-get reply :time)
-                             (plist-get reply :text)))))
-        (setq reviewer--render-path (reviewer--render-file file))
-        (write-region (point-min) (point-max) reviewer--render-path)
-        (set-buffer-modified-p nil)
-        (setq buffer-read-only t)
-        (reviewer-render-mode 1))
-      out)))
+  (unless (reviewer-all-annotations)
+    (user-error "No annotations in this buffer"))
+  ;; Overlay positions only mean something in this buffer, so resolve
+  ;; everything derived from them here, before switching to OUT below.
+  (let* ((magit-p (derived-mode-p 'magit-mode))
+         (repo    (and magit-p (fboundp 'magit-toplevel) (magit-toplevel)))
+         (branch  (and magit-p (reviewer--magit-branch)))
+         (head    (and magit-p (reviewer--magit-head)))
+         (commit  (and magit-p (reviewer--magit-commit)))
+         (file    (reviewer--buffer-label))
+         (dir     default-directory)
+         (lang    (reviewer--org-lang))
+         (entries (reviewer--buffer-entries))
+         (out     (get-buffer-create (format "*reviewer:%s*" (file-name-nondirectory file)))))
+    (with-current-buffer out
+      (setq default-directory dir)
+      (setq buffer-file-name nil)
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (org-mode)
+      ;; default-directory intentionally doesn't match this buffer's
+      ;; (nonexistent) file, so path-based modeline styles would render
+      ;; garbage; fall back to a plain buffer-name display if available.
+      ;; Set after `org-mode' since major modes wipe non-permanent
+      ;; buffer-local variables via `kill-all-local-variables'.
+      (when (boundp 'doom-modeline-buffer-file-name-style)
+        (setq-local doom-modeline-buffer-file-name-style 'buffer-name))
+      (insert "#+STARTUP: showall\n")
+      (insert (format "#+TITLE: Review: %s\n" file))
+      (when repo (insert (format "#+REPO: %s\n" repo)))
+      (when branch (insert (format "#+BRANCH: %s\n" branch)))
+      (when head (insert (format "#+HEAD: %s\n" head)))
+      (when commit (insert (format "#+COMMIT: %s\n" commit)))
+      (insert "\n")
+      (reviewer--insert-entries entries lang 1)
+      (setq reviewer--render-path (reviewer--render-file file))
+      (write-region (point-min) (point-max) reviewer--render-path)
+      (set-buffer-modified-p nil)
+      (setq buffer-read-only t)
+      (reviewer-render-mode 1))
+    out))
+
+(defun reviewer--project-root ()
+  "Return the current buffer's project root, or nil if it has none.
+Prefers Projectile when available and it finds one; falls back to
+`project.el'."
+  (or (and (fboundp 'projectile-project-root) (projectile-project-root))
+      (when-let* ((proj (project-current)))
+        (expand-file-name (project-root proj)))))
+
+(defun reviewer--project-buffers (root)
+  "Return live buffers under project ROOT with at least one annotation.
+A buffer counts as under ROOT if its visited file is, or -- for a
+buffer with no file, e.g. a magit diff -- its `default-directory' is."
+  (seq-filter (lambda (buf)
+                (with-current-buffer buf
+                  (and (reviewer-all-annotations)
+                       (file-in-directory-p (or buffer-file-name default-directory) root))))
+              (buffer-list)))
+
+(defun reviewer--render-project-to-buffer ()
+  "Render every annotated buffer under the current project as one org buffer.
+One `* <buffer label>' heading per buffer, its own annotations nested
+under that.  Return that buffer, as `reviewer--render-to-buffer' does
+for a single buffer.  Signals a `user-error' if there's no current
+project, or no annotations under it."
+  (let ((root (reviewer--project-root)))
+    (unless root
+      (user-error "No project found (Projectile/project.el) for this buffer"))
+    (let ((buffers (reviewer--project-buffers root))
+          (label (directory-file-name root)))
+      (unless buffers
+        (user-error "No annotations in any buffer under %s" root))
+      (let ((out (get-buffer-create (format "*reviewer:%s*" (file-name-nondirectory label)))))
+        (with-current-buffer out
+          (setq default-directory root)
+          (setq buffer-file-name nil)
+          (setq buffer-read-only nil)
+          (erase-buffer)
+          (org-mode)
+          (when (boundp 'doom-modeline-buffer-file-name-style)
+            (setq-local doom-modeline-buffer-file-name-style 'buffer-name))
+          (insert "#+STARTUP: showall\n")
+          (insert (format "#+TITLE: Review: %s\n\n" label))
+          (dolist (buf buffers)
+            (let (buf-label lang entries)
+              (with-current-buffer buf
+                (setq buf-label (reviewer--buffer-label))
+                (setq lang (reviewer--org-lang))
+                (setq entries (reviewer--buffer-entries)))
+              (insert (format "* %s\n\n" buf-label))
+              (reviewer--insert-entries entries lang 2)))
+          (setq reviewer--render-path (reviewer--render-file label))
+          (write-region (point-min) (point-max) reviewer--render-path)
+          (set-buffer-modified-p nil)
+          (setq buffer-read-only t)
+          (reviewer-render-mode 1))
+        out))))
 
 (defun reviewer-render ()
   "Render all annotations in the current buffer as an org file in /tmp/."
@@ -560,6 +637,31 @@ Unlike `reviewer-render', the render buffer is created but not displayed."
     (kill-new path)
     (message "Copied as %s" path)))
 
+(defun reviewer-render-project ()
+  "Render annotations across the current project as an org file in /tmp/.
+See `reviewer--project-root' for how the project is found."
+  (interactive)
+  (pop-to-buffer (reviewer--render-project-to-buffer)))
+
+(defun reviewer-yank-render-project ()
+  "Render every annotated buffer under the current project into a hidden
+buffer and copy the result to the kill ring.
+See `reviewer--project-root' for how the project is found."
+  (interactive)
+  (let ((out (reviewer--render-project-to-buffer)))
+    (kill-new (with-current-buffer out (buffer-string)))
+    (message "Rendered project annotations copied to kill ring")))
+
+(defun reviewer-yank-render-project-file-name ()
+  "Render every annotated buffer under the current project to /tmp/ and
+copy the render file's path to the kill ring.
+See `reviewer--project-root' for how the project is found."
+  (interactive)
+  (let* ((out  (reviewer--render-project-to-buffer))
+         (path (buffer-local-value 'reviewer--render-path out)))
+    (kill-new path)
+    (message "Copied as %s" path)))
+
 (defvar reviewer-command-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "a") #'reviewer-annotate)
@@ -568,6 +670,9 @@ Unlike `reviewer-render', the render buffer is created but not displayed."
     (define-key map (kbd "s") #'reviewer-show-annotation-at-point)
     (define-key map (kbd "e") #'reviewer-yank-render-file-name)
     (define-key map (kbd "y") #'reviewer-yank-render)
+    (define-key map (kbd "P") #'reviewer-render-project)
+    (define-key map (kbd "E") #'reviewer-yank-render-project-file-name)
+    (define-key map (kbd "Y") #'reviewer-yank-render-project)
     (define-key map (kbd "x") #'reviewer-delete-annotation-at-point)
     (define-key map (kbd "k") #'reviewer-delete-region-annotations)
     (define-key map (kbd "c") #'reviewer-clear-annotations)
@@ -587,10 +692,15 @@ bound to `reviewer-transient' instead.")
     ("x" "delete annotation"            reviewer-delete-annotation-at-point)
     ("k" "clear annotations in region"   reviewer-delete-region-annotations)
     ("c" "clear all annotations in file" reviewer-clear-annotations)]
-   ["summarize"
-    ("r" "show all annotations"         reviewer-render)
-    ("y" "copy annotations"             reviewer-yank-render)
-    ("e" "export annotations as file"   reviewer-yank-render-file-name)]])
+   ["buffer"
+    ("r" "show all annotations"       reviewer-render)
+    ("y" "copy annotations"           reviewer-yank-render)
+    ("e" "export annotations as file" reviewer-yank-render-file-name)]
+   ["project"
+    ("P" "show all annotations"       reviewer-render-project)
+    ("Y" "copy annotations"           reviewer-yank-render-project)
+    ("E" "export annotations as file" reviewer-yank-render-project-file-name)]]
+  [""])
 
 (defun reviewer--set-use-transient (symbol value)
   "Set SYMBOL to VALUE and rebind `C-c r' in `reviewer-mode-map' accordingly."
