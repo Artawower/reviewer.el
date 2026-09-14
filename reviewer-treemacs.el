@@ -16,10 +16,13 @@
 ;; are marked dedicated, `no-delete-other-windows', and excluded from
 ;; `other-window' (mirroring vanilla treemacs's own
 ;; `treemacs-is-never-other-window', on by default here rather than
-;; configurable), and are toggled together by `reviewer-treemacs-toggle'
-;; (also bound to "q" in both panes) -- so from the user's perspective
-;; they're one locked unit, not two independent side windows that
-;; happen to be adjacent.
+;; configurable), and are opened, switched to, and closed together by
+;; `reviewer-treemacs-toggle' (also bound to "q" in both panes) -- open
+;; if not already showing, switch focus there if showing but some
+;; other window is selected, close only if a window of the pane is
+;; already selected -- so from the user's perspective they're one
+;; locked unit, not two independent side windows that happen to be
+;; adjacent.
 ;;
 ;; Moving point onto a thread -- with n/p, arrows, or a mouse click --
 ;; previews it in the detail pane immediately, no RET required.  File
@@ -47,10 +50,12 @@
 ;; found by scanning `(buffer-list)' and calling
 ;; `reviewer-all-annotations' in each -- under a file/buffer label from
 ;; `reviewer-treemacs--buffer-label', with each annotation's overlay
-;; itself as the thread node underneath.  That's rebuilt fresh each
-;; time the pane opens, so edits, replies, and new annotations made
-;; elsewhere are picked up on the next toggle; there's no live refresh
-;; while the pane is already open.
+;; itself as the thread node underneath.  Rebuilt fresh -- same as
+;; toggling the pane closed and back open, expand/collapse state and
+;; all -- on `reviewer-annotation-change-hook', so an annotation
+;; created, edited, replied to, or deleted anywhere, not just through
+;; this pane's own commands, shows up here without waiting on a manual
+;; toggle.
 ;;
 ;; Not loaded by `reviewer.el' itself -- treemacs is a much heavier
 ;; dependency than the mode's other optional integrations (posframe,
@@ -500,10 +505,13 @@ be refreshed by simply re-reading it."
 (define-derived-mode reviewer-treemacs-reply-mode text-mode "Reviewer-Reply"
   "Major mode for composing a reply to a thread in the reviewer tree pane.
 \\{reviewer-treemacs-reply-mode-map}"
+  ;; Header-line text doesn't wrap -- it just gets clipped at the window
+  ;; edge -- and this pane is as narrow as the tree/detail pane
+  ;; (`reviewer-treemacs-width'), so kept short enough to actually fit
+  ;; instead of the longer, friendlier phrasing used elsewhere.
   (setq header-line-format
         (substitute-command-keys
-         (concat "Reply to thread.  "
-                 "\\[reviewer-treemacs-reply-finish] to send, "
+         (concat "\\[reviewer-treemacs-reply-finish] to reply, "
                  "\\[reviewer-treemacs-reply-abort] to cancel."))))
 
 (defun reviewer-treemacs-reply-to-thread-at-point ()
@@ -603,6 +611,45 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
       (round (* reviewer-treemacs-width (frame-width)))
     reviewer-treemacs-width))
 
+(defun reviewer-treemacs--render ()
+  "(Re-)render the tree from `reviewer-treemacs-root' into the current buffer.
+Shared by `reviewer-treemacs--open' (the initial render, tree window
+already selected) and `reviewer-treemacs--refresh' (re-rendering an
+already-open pane from a buffer that need not be selected, e.g. when
+`reviewer-annotation-change-hook' fires from some other window), so
+the two stay in lockstep.
+`treemacs-initialize' resets the buffer to `treemacs-mode', which
+wipes the local keymap and `post-command-hook' addition along with
+everything else non-permanent-local, so both are reinstalled every
+call; leaves point at the top of the rendered tree -- the first
+file/label node, a group header with nothing to preview or act on --
+so it's nudged onto the first thread the same way `n' would, and
+`window-point' is synced explicitly on every window showing this
+buffer since a refresh may run without any of them selected."
+  (treemacs-initialize reviewer-treemacs-root
+    :with-expand-depth 1)
+  (when-let* ((btn (treemacs-current-button)))
+    (unless (treemacs-button-get btn :leaf)
+      (reviewer-treemacs-next-line)))
+  (reviewer-treemacs--local-keymap treemacs-mode-map
+                                    `(("q" . reviewer-treemacs-toggle)
+                                      ("C-g" . reviewer-treemacs-toggle)
+                                      ("r" . reviewer-treemacs-reply-to-thread-at-point)
+                                      ("n" . reviewer-treemacs-next-line)
+                                      ("p" . reviewer-treemacs-previous-line)
+                                      ("o o" . reviewer-treemacs--visit-annotation)
+                                      ("o v" . reviewer-treemacs-open-vertical-split)
+                                      ("o h" . reviewer-treemacs-open-horizontal-split)
+                                      ("o c" . reviewer-treemacs-open-and-close)))
+  (add-hook 'post-command-hook #'reviewer-treemacs--preview-at-point nil t)
+  ;; The hook above only fires on the next real command; call it once now
+  ;; so the detail pane reflects wherever point ended up (the first
+  ;; thread, or the placeholder if the tree turned out empty) without
+  ;; waiting on that.
+  (reviewer-treemacs--preview-at-point)
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (set-window-point window (point))))
+
 (defun reviewer-treemacs--open ()
   "Open the locked tree/detail pane pair, tree above detail."
   (let* ((side reviewer-treemacs-side)
@@ -619,19 +666,25 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
     (reviewer-treemacs--lock-window detail-window)
     (reviewer-treemacs--show-detail reviewer-treemacs--placeholder-text)
     (select-window tree-window)
-    (treemacs-initialize reviewer-treemacs-root
-      :with-expand-depth 1)
-    (reviewer-treemacs--local-keymap treemacs-mode-map
-                                      `(("q" . reviewer-treemacs-toggle)
-                                        ("C-g" . reviewer-treemacs-toggle)
-                                        ("r" . reviewer-treemacs-reply-to-thread-at-point)
-                                        ("n" . reviewer-treemacs-next-line)
-                                        ("p" . reviewer-treemacs-previous-line)
-                                        ("o o" . reviewer-treemacs--visit-annotation)
-                                        ("o v" . reviewer-treemacs-open-vertical-split)
-                                        ("o h" . reviewer-treemacs-open-horizontal-split)
-                                        ("o c" . reviewer-treemacs-open-and-close)))
-    (add-hook 'post-command-hook #'reviewer-treemacs--preview-at-point nil t)))
+    (reviewer-treemacs--render)))
+
+(defun reviewer-treemacs--refresh ()
+  "Re-render the tree pane from current annotations, if the pane is open.
+Added to `reviewer-annotation-change-hook', so an annotation created,
+edited, replied to, or deleted anywhere -- not just through this
+pane's own commands -- is reflected here too, without needing to
+toggle the pane closed and back open by hand.  Runs via
+`with-current-buffer' rather than selecting the tree window, so it
+doesn't steal focus from wherever the triggering command left it.
+Resets any expand/collapse state in the tree, the same as toggling it
+closed and back open would -- `treemacs-initialize' always re-renders
+from scratch, there's no incremental update path in this tree's data
+model to preserve it instead."
+  (when (reviewer-treemacs--windows)
+    (with-current-buffer reviewer-treemacs--tree-buffer
+      (reviewer-treemacs--render))))
+
+(add-hook 'reviewer-annotation-change-hook #'reviewer-treemacs--refresh)
 
 (defun reviewer-treemacs--close ()
   "Close the tree/detail pane pair, killing their buffers.
@@ -646,11 +699,17 @@ Also closes the reply pane, if open."
 
 ;;;###autoload
 (defun reviewer-treemacs-toggle ()
-  "Toggle the locked reviewer tree/detail pane pair."
+  "Show, switch to, or close the reviewer tree/detail pane pair.
+Opens it if it isn't showing; if it's already showing but some other
+window is selected, just switches focus there instead of closing it --
+only closes it when a window of the pane is already the selected one,
+e.g. \"q\"/\"C-g\" pressed from inside it."
   (interactive)
-  (if (reviewer-treemacs--windows)
-      (reviewer-treemacs--close)
-    (reviewer-treemacs--open)))
+  (let ((windows (reviewer-treemacs--windows)))
+    (cond
+     ((null windows) (reviewer-treemacs--open))
+     ((memq (selected-window) windows) (reviewer-treemacs--close))
+     (t (select-window (get-buffer-window reviewer-treemacs--tree-buffer))))))
 
 ;; Appended to `reviewer.el's transient rather than defined alongside
 ;; it, since that file shouldn't have to require treemacs just to know

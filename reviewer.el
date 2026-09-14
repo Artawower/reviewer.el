@@ -121,13 +121,21 @@ of (reply . OVERLAY) to append a reply to an existing thread.")
   "Return a new, likely-unique id for an annotation thread."
   (format "%s-%04x" (format-time-string "%Y%m%dT%H%M%S") (random #x10000)))
 
+(defvar reviewer-annotation-change-hook nil
+  "Hook run after an annotation is created, edited, replied to, or deleted.
+Runs with no arguments and carries no information about which
+annotation or buffer changed; a listener that needs to know should
+just re-derive it, e.g. via `reviewer-all-annotations' across
+`(buffer-list)'.")
+
 (defun reviewer--append-reply (overlay author text)
   "Append a reply by AUTHOR with TEXT to annotation OVERLAY's thread."
   (overlay-put overlay 'reviewer-replies
                (append (overlay-get overlay 'reviewer-replies)
                        (list (list :author author
                                    :time (format-time-string "%H:%M")
-                                   :text text)))))
+                                   :text text))))
+  (run-hooks 'reviewer-annotation-change-hook))
 
 (defun reviewer-annotation-edit-finish ()
   "Save this buffer's text onto the annotation being edited, then close it.
@@ -157,7 +165,8 @@ left empty is simply dropped instead."
               (overlay-put ov 'reviewer-thread-id (reviewer--generate-thread-id))
               (overlay-put ov 'face 'reviewer-highlight-face)
               (overlay-put ov 'evaporate t))
-            (deactivate-mark))))))))
+            (deactivate-mark))))))
+    (run-hooks 'reviewer-annotation-change-hook)))
 
 (defun reviewer-annotation-edit-abort ()
   "Abandon this annotation edit without changing anything."
@@ -226,7 +235,8 @@ See `reviewer--edit-target' for the shapes TARGET can take."
   (let ((annotations (reviewer-all-annotations)))
     (unless annotations
       (user-error "No annotations in this buffer"))
-    (mapc #'delete-overlay annotations)))
+    (mapc #'delete-overlay annotations)
+    (run-hooks 'reviewer-annotation-change-hook)))
 
 (defun reviewer-delete-annotation-at-point ()
   "Delete the annotation at point."
@@ -234,7 +244,8 @@ See `reviewer--edit-target' for the shapes TARGET can take."
   (let ((ov (reviewer--annotation-at (point))))
     (unless ov
       (user-error "No annotation at point"))
-    (delete-overlay ov)))
+    (delete-overlay ov)
+    (run-hooks 'reviewer-annotation-change-hook)))
 
 (defun reviewer-delete-region-annotations ()
   "Delete all annotations overlapping the active region."
@@ -246,7 +257,8 @@ See `reviewer--edit-target' for the shapes TARGET can take."
     (unless annotations
       (user-error "No annotations in region"))
     (mapc #'delete-overlay annotations)
-    (deactivate-mark)))
+    (deactivate-mark)
+    (run-hooks 'reviewer-annotation-change-hook)))
 
 (declare-function posframe-show "posframe")
 (declare-function posframe-hide "posframe")
