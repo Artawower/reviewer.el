@@ -475,40 +475,57 @@ diffed commit, if any) for magit buffers, then the buffer name."
 
 (defun reviewer--buffer-entries ()
   "Return this buffer's annotations as a list of plists for rendering.
-Each has :range, :text, :note, and :replies, plus :file -- the diff
-hunk's file, for a magit buffer's per-hunk annotations; nil
-otherwise."
+Each has :range, :text, :thread-id, :author, :time, :note, and
+:replies, plus :file -- the diff hunk's file, for a magit buffer's
+per-hunk annotations; nil otherwise."
   (let ((magit-p (derived-mode-p 'magit-mode)))
     (mapcar (lambda (ov)
-              (list :range   (reviewer--line-range ov)
-                    :text    (buffer-substring-no-properties
-                              (overlay-start ov) (overlay-end ov))
-                    :note    (reviewer-annotation-text ov)
-                    :replies (reviewer-annotation-replies ov)
-                    :file    (and magit-p (reviewer--magit-file-at
-                                            (overlay-start ov)))))
+              (list :range     (reviewer--line-range ov)
+                    :text      (buffer-substring-no-properties
+                                (overlay-start ov) (overlay-end ov))
+                    :thread-id (reviewer-annotation-thread-id ov)
+                    :author    (reviewer-annotation-author ov)
+                    :time      (reviewer-annotation-time ov)
+                    :note      (reviewer-annotation-text ov)
+                    :replies   (reviewer-annotation-replies ov)
+                    :file      (and magit-p (reviewer--magit-file-at
+                                              (overlay-start ov)))))
             (reviewer-all-annotations))))
+
+(defun reviewer--flatten-text (text)
+  "Collapse TEXT's newlines to spaces, so it prints on a single line."
+  (replace-regexp-in-string "\n+" " " text))
+
+(defun reviewer--insert-thread-summary (entry)
+  "Insert ENTRY's thread id, then one \"author (time): text\" line per
+participant -- the root note, then each reply, oldest first -- as a
+quick digest of the whole thread ahead of its full text below."
+  (insert (format "threadId: %s\n" (plist-get entry :thread-id)))
+  (insert (format "  %s (%s): %s\n" (plist-get entry :author) (plist-get entry :time)
+                   (reviewer--flatten-text (plist-get entry :note))))
+  (dolist (reply (plist-get entry :replies))
+    (insert (format "  %s (%s): %s\n" (plist-get reply :author) (plist-get reply :time)
+                     (reviewer--flatten-text (plist-get reply :text)))))
+  (insert "\n"))
 
 (defun reviewer--insert-entries (entries lang level)
   "Insert ENTRIES (as returned by `reviewer--buffer-entries') as org headings.
 LANG tags each entry's quoted span as an org src block; LEVEL is the
 heading depth for each entry's own heading (an integer, 1 for a
-top-level `*'), with a `Note'/`Reply' sub-heading one level deeper --
-so a single-buffer render can start entries at the top level while a
-multi-buffer one nests them under a `* <buffer>' heading instead."
-  (let ((stars (make-string level ?*))
-        (substars (make-string (1+ level) ?*)))
+top-level `*') -- so a single-buffer render can start entries at the
+top level while a multi-buffer one nests them under a `* <buffer>'
+heading instead.  The thread-id/participant digest from
+`reviewer--insert-thread-summary' is the only rendering of an entry's
+note/replies; there's no separate `Note'/`Reply' sub-heading
+duplicating that text."
+  (let ((stars (make-string level ?*)))
     (dolist (entry entries)
       (insert (format "%s %s\n\n" stars
                        (if (plist-get entry :file)
                            (format "%s: %s" (plist-get entry :file) (plist-get entry :range))
                          (plist-get entry :range))))
       (insert (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n\n" lang (plist-get entry :text)))
-      (insert (format "%s Note\n\n%s\n\n" substars (plist-get entry :note)))
-      (dolist (reply (plist-get entry :replies))
-        (insert (format "%s Reply (%s, %s)\n\n%s\n\n"
-                         substars (plist-get reply :author) (plist-get reply :time)
-                         (plist-get reply :text)))))))
+      (reviewer--insert-thread-summary entry))))
 
 (defun reviewer--render-to-buffer ()
   "Render this buffer's annotations as org into a `*reviewer:...*' buffer.
@@ -576,6 +593,14 @@ buffer with no file, e.g. a magit diff -- its `default-directory' is."
                        (file-in-directory-p (or buffer-file-name default-directory) root))))
               (buffer-list)))
 
+(defun reviewer--project-buffer-heading ()
+  "Return this buffer's `* ...' heading label for the project-wide render.
+Its file path if it has one; otherwise \"buffer:<name>\" -- e.g. for a
+magit diff or a scratch buffer -- so a project export's headings, file
+paths and buffer names mixed together, can still tell the two apart at
+a glance."
+  (or buffer-file-name (format "buffer:%s" (buffer-name))))
+
 (defun reviewer--render-project-to-buffer ()
   "Render every annotated buffer under the current project as one org buffer.
 One `* <buffer label>' heading per buffer, its own annotations nested
@@ -603,7 +628,7 @@ project, or no annotations under it."
           (dolist (buf buffers)
             (let (buf-label lang entries)
               (with-current-buffer buf
-                (setq buf-label (reviewer--buffer-label))
+                (setq buf-label (reviewer--project-buffer-heading))
                 (setq lang (reviewer--org-lang))
                 (setq entries (reviewer--buffer-entries)))
               (insert (format "* %s\n\n" buf-label))
