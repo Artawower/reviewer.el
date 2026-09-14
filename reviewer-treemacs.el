@@ -13,10 +13,13 @@
 ;; frame, with a plain detail pane stacked directly beneath it showing
 ;; the selected thread's full text.  The two windows share a side
 ;; (`left' or `right', see `reviewer-treemacs-side') at adjacent slots,
-;; are marked dedicated and `no-delete-other-windows', and are toggled
-;; together by `reviewer-treemacs-toggle' (also bound to "q" in both
-;; panes) -- so from the user's perspective they're one locked unit,
-;; not two independent side windows that happen to be adjacent.
+;; are marked dedicated, `no-delete-other-windows', and excluded from
+;; `other-window' (mirroring vanilla treemacs's own
+;; `treemacs-is-never-other-window', on by default here rather than
+;; configurable), and are toggled together by `reviewer-treemacs-toggle'
+;; (also bound to "q" in both panes) -- so from the user's perspective
+;; they're one locked unit, not two independent side windows that
+;; happen to be adjacent.
 ;;
 ;; Moving point onto a thread -- with n/p, arrows, or a mouse click --
 ;; previews it in the detail pane immediately, no RET required.  File
@@ -66,6 +69,21 @@
 (defcustom reviewer-treemacs-side 'right
   "Which side of the frame the tree/detail pane pair docks to."
   :type '(choice (const :tag "Left" left) (const :tag "Right" right))
+  :group 'reviewer-treemacs)
+
+(defcustom reviewer-treemacs-slot 90
+  "Side-window slot the tree pane occupies on `reviewer-treemacs-side'.
+The detail pane takes the next slot up, the reply pane the one after
+that.  Emacs's side windows are addressed by (side . slot), and a
+`display-buffer' call that targets an already-occupied (side . slot)
+just takes over that window outright -- dedication and
+`no-other-window' don't protect against it, since that reuse happens
+beneath those checks.  Slot 0 is the overwhelmingly common default
+other packages fall back to (e.g. this Emacs's own
+`display-buffer-alist' entry routes `*magit: '  buffers to
+`(side . right) (slot . 0)'), so this defaults far out of that range;
+change it if it still collides with something in your own setup."
+  :type 'integer
   :group 'reviewer-treemacs)
 
 (defcustom reviewer-treemacs-width 0.3
@@ -443,7 +461,9 @@ SAVED is an alist as returned by `reviewer-treemacs--save-heights'."
   (when-let* ((buf (get-buffer reviewer-treemacs--reply-buffer)))
     (let ((saved (buffer-local-value 'reviewer-treemacs--reply-saved-heights buf))
           (window (get-buffer-window buf)))
-      (when window (delete-window window))
+      (when window
+        (reviewer-treemacs--unlock-window window)
+        (delete-window window))
       (kill-buffer buf)
       (reviewer-treemacs--restore-heights saved))))
 
@@ -494,11 +514,12 @@ be refreshed by simply re-reading it."
       (user-error "No thread at point"))
     (let ((saved (reviewer-treemacs--save-heights)))
       (select-window
-       (display-buffer-in-side-window
-        (get-buffer-create reviewer-treemacs--reply-buffer)
-        `((side . ,reviewer-treemacs-side) (slot . 2)
-          (window-width . ,(reviewer-treemacs--resolved-width))
-          (window-height . 8))))
+       (reviewer-treemacs--lock-window
+        (display-buffer-in-side-window
+         (get-buffer-create reviewer-treemacs--reply-buffer)
+         `((side . ,reviewer-treemacs-side) (slot . ,(+ reviewer-treemacs-slot 2))
+           (window-width . ,(reviewer-treemacs--resolved-width))
+           (window-height . 8)))))
       (reviewer-treemacs-reply-mode)
       (erase-buffer)
       (setq reviewer-treemacs--reply-target btn)
@@ -529,20 +550,29 @@ be refreshed by simply re-reading it."
 ;; --- locked side-window pair --------------------------------------------
 
 (defun reviewer-treemacs--lock-window (window)
-  "Mark WINDOW dedicated, protected from `delete-other-windows', and
-its height preserved against automatic resizing.
-The height preservation matters once the reply pane opens as a third,
-temporary window stacked below WINDOW in the same side column --
-without it, Emacs redistributes space across all three and doesn't
-restore the original split when the reply pane closes."
+  "Mark WINDOW dedicated, protected from `delete-other-windows', excluded
+from `other-window' (mirroring vanilla treemacs's own
+`treemacs-is-never-other-window'), and its height preserved against
+automatic resizing.
+Being both dedicated and excluded from `other-window' -- not just one
+or the other -- closes off the two different ways WINDOW could
+otherwise get overwritten: `dedicated' stops `display-buffer' and
+friends from swapping in some unrelated buffer, `no-other-window'
+stops `other-window'/`ace-window'/etc. from cycling into it in the
+first place.  The height preservation matters once the reply pane
+opens as a third, temporary window stacked below WINDOW in the same
+side column -- without it, Emacs redistributes space across all three
+and doesn't restore the original split when the reply pane closes."
   (set-window-dedicated-p window t)
   (set-window-parameter window 'no-delete-other-windows t)
+  (set-window-parameter window 'no-other-window t)
   (window-preserve-size window nil t)
   window)
 
 (defun reviewer-treemacs--unlock-window (window)
   "Undo `reviewer-treemacs--lock-window' on WINDOW before deleting it."
   (set-window-parameter window 'no-delete-other-windows nil)
+  (set-window-parameter window 'no-other-window nil)
   (set-window-dedicated-p window nil))
 
 (defun reviewer-treemacs--windows ()
@@ -579,11 +609,11 @@ handed to `display-buffer-in-side-window' as a plain integer instead."
          (width (reviewer-treemacs--resolved-width))
          (tree-window (display-buffer-in-side-window
                        (get-buffer-create reviewer-treemacs--tree-buffer)
-                       `((side . ,side) (slot . 0)
+                       `((side . ,side) (slot . ,reviewer-treemacs-slot)
                          (window-width . ,width))))
          (detail-window (display-buffer-in-side-window
                          (reviewer-treemacs--detail-buffer)
-                         `((side . ,side) (slot . 1)
+                         `((side . ,side) (slot . ,(1+ reviewer-treemacs-slot))
                            (window-width . ,width)))))
     (reviewer-treemacs--lock-window tree-window)
     (reviewer-treemacs--lock-window detail-window)
